@@ -239,7 +239,7 @@ func (fp *fingerprintProxy) setupHandlers() {
 	// Non-proxy handler for transparent mode
 	fp.proxy.NonproxyHandler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.Host == "" {
-			fmt.Fprintln(w, "Cannot handle requests without Host header, e.g., HTTP 1.0")
+			_, _ = fmt.Fprintln(w, "Cannot handle requests without Host header, e.g., HTTP 1.0")
 			return
 		}
 		req.URL.Scheme = "http"
@@ -347,7 +347,7 @@ func (fp *fingerprintProxy) Run(httpAddr, httpsAddr string) error {
 	}
 
 	// Close HTTPS listener
-	ln.Close()
+	_ = ln.Close()
 
 	// Close idle connections in cache
 	fp.transportCache.CloseIdleConnections()
@@ -362,7 +362,7 @@ func (fp *fingerprintProxy) handleHTTPS(c net.Conn) {
 		if r := recover(); r != nil {
 			log.Printf("[Error] panic in handleHTTPS: %v", r)
 		}
-		c.Close()
+		_ = c.Close()
 	}()
 
 	tlsConn, err := vhost.TLS(c)

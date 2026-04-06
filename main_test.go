@@ -381,7 +381,7 @@ func TestChromeFingerprintAgainstAPI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected status 200, got %d", resp.StatusCode)
@@ -434,7 +434,7 @@ func TestFirefoxFingerprintAgainstAPI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected status 200, got %d", resp.StatusCode)
@@ -568,18 +568,24 @@ func TestCacheLength(t *testing.T) {
 		t.Errorf("expected initial length 0, got %d", cache.Len())
 	}
 
-	cache.GetOrCreate("chrome_133")
+	if _, err := cache.GetOrCreate("chrome_133"); err != nil {
+		t.Fatalf("failed to create chrome transport: %v", err)
+	}
 	if cache.Len() != 1 {
 		t.Errorf("expected length 1, got %d", cache.Len())
 	}
 
-	cache.GetOrCreate("firefox_147")
+	if _, err := cache.GetOrCreate("firefox_147"); err != nil {
+		t.Fatalf("failed to create firefox transport: %v", err)
+	}
 	if cache.Len() != 2 {
 		t.Errorf("expected length 2, got %d", cache.Len())
 	}
 
 	// Same profile should not increase length
-	cache.GetOrCreate("chrome_133")
+	if _, err := cache.GetOrCreate("chrome_133"); err != nil {
+		t.Fatalf("failed to create chrome transport: %v", err)
+	}
 	if cache.Len() != 2 {
 		t.Errorf("expected length 2 after duplicate, got %d", cache.Len())
 	}
