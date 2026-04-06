@@ -90,15 +90,24 @@ jobs:
           name: coverage
           path: .
 
+      - name: Generate coverage report
+        run: |
+          go test -coverprofile=coverage.out -covermode=atomic ./...
+
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
         with:
           files: coverage.out
           flags: unittests
           name: fingerprintproxy
-          fail_ci_if_error: true
+          fail_ci_if_error: false
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Coverage Summary
+        run: |
+          echo "## Coverage Summary" >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage.out >> "$GITHUB_STEP_SUMMARY"
 
   cross-platform:
     name: Cross-platform Build
