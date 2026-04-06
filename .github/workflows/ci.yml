@@ -140,7 +140,9 @@ jobs:
           cache: true
 
       - name: Build
-        run: GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o fingerprintproxy${{ matrix.artifact_suffix }} .
+        run: go build -ldflags="-s -w" -o fingerprintproxy${{ matrix.artifact_suffix }} .
+        env:
+          GOARCH: ${{ matrix.goarch }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
