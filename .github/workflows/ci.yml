@@ -121,10 +121,13 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact_suffix: '-linux-amd64'
+            goarch: amd64
           - os: macos-latest
             artifact_suffix: '-darwin-arm64'
+            goarch: arm64
           - os: windows-latest
             artifact_suffix: '-windows-amd64.exe'
+            goarch: amd64
 
     steps:
       - name: Checkout code
@@ -137,9 +140,7 @@ jobs:
           cache: true
 
       - name: Build
-        run: |
-          arch="$(case ${{ matrix.os }} in ubuntu-latest) echo amd64;; macos-latest) echo arm64;; windows-latest) echo amd64;; esac)"
-          GOARCH="$arch" go build -ldflags="-s -w" -o "fingerprintproxy${{ matrix.artifact_suffix }}" .
+        run: GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w" -o fingerprintproxy${{ matrix.artifact_suffix }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
