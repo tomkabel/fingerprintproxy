@@ -1,0 +1,54 @@
+# GoReleaser configuration for fingerprintproxy
+# See https://goreleaser.com/customization/ for details
+
+project_name: fingerprintproxy
+
+version: 2
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: fingerprintproxy
+    main: .
+    binary: fingerprintproxy
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksums:
+  - algorithm: sha256
+
+snapshot:
+  name_template: "{{ .Tag }}-next"
+
+# Disable announce as defaults aren't configured
+announce:
+  twitter:
+    enabled: false
+  slack:
+    enabled: false
+
+# For GitHub Releases
+release:
+  github:
+    enabled: true
