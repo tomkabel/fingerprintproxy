@@ -3,8 +3,8 @@ module github.com/tomkabel/fingerprintproxy
 go 1.24.1
 
 require (
-	github.com/elazarl/goproxy v0.0.0-20250321-5c78a5b9f3a5
-	github.com/inconshreveable/go-vhost v0.0.0-20160627193104-06d84117953b
+	github.com/elazarl/goproxy v1.8.3
+	github.com/inconshreveable/go-vhost v1.0.0
 	github.com/tomkabel/browser-fingerprint-transport v0.1.0
 )
 
