@@ -39,7 +39,7 @@ jobs:
         run: go mod download
 
       - name: Run govulncheck
-        uses: golang/vuln-action@v1.1.0
+        uses: golang/govulncheck-action@v1
         with:
           args: ./...
 
