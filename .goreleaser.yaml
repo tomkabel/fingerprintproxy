@@ -34,30 +34,14 @@ archives:
     format_overrides:
       - goos: windows
         format: zip
-    checksum: true
-    signature: true
-    fingerprint: {{ .Env.GPG_FINGERPRINT }}
 
 checksums:
   - algorithm: sha256
-    signature: true
-    fingerprint: {{ .Env.GPG_FINGERPRINT }}
-
-signs:
-  - artifact: checksum
-    cmd: gpg2
-    args:
-      - "--batch"
-      - "-u"
-      - "{{ .Env.GPG_FINGERPRINT }}"
-      - "--output"
-      - "${signature}"
-      - "--detach-sign"
-      - "${artifact}"
 
 snapshot:
   name_template: "{{ .Tag }}-next"
 
+# Disable announce as defaults aren't configured
 announce:
   twitter:
     enabled: false
@@ -68,5 +52,3 @@ announce:
 release:
   github:
     enabled: true
-    owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
-    name: "{{ .Env.GITHUB_REPOSITORY }}"
