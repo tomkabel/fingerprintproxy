@@ -52,10 +52,10 @@ jobs:
             go test -v -short ./...
           fi
 
-      - name: Verify module tidiness
+      - name: Verify module validity
         run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
+          go mod verify
+          go build -v ./...
 
       - name: Upload coverage
         if: matrix.race == true

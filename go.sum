@@ -16,8 +16,10 @@ github.com/coder/websocket v1.8.14 h1:9L0p0iKiNOibykf283eHkKUHHrpG7f65OE3BhhO7v9
 github.com/coder/websocket v1.8.14/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/inconshreveable/go-vhost v0.0.0-20160627193104-06d84117953b h1:IpLPmn6Re21F0MaV6Zsc5RdSE6KuoFpWmHiUSEs3PrE=
-github.com/inconshreveable/go-vhost v0.0.0-20160627193104-06d84117953b/go.mod h1:aA6DnFhALT3zH0y+A39we+zbrdMC2N0X/q21e6FI0LU=
+github.com/elazarl/goproxy v1.8.3 h1:XhiZpzW0NvsGOqSv/F3v4+1F29842yYaJNN+In5Fnuc=
+github.com/elazarl/goproxy v1.8.3/go.mod h1:b5xm6W48AUHNpRTCvlnd0YVh+JafCCtsLsJZvvNTz+E=
+github.com/inconshreveable/go-vhost v1.0.0 h1:IK4VZTlXL4l9vz2IZoiSFbYaaqUW7dXJAiPriUN5Ur8=
+github.com/inconshreveable/go-vhost v1.0.0/go.mod h1:aA6DnFhALT3zH0y+A39we+zbrdMC2N0X/q21e6FI0LU=
 github.com/klauspost/compress v1.18.5 h1:/h1gH5Ce+VWNLSWqPzOVn6XBO+vJbCNGvjoaGBFW2IE=
 github.com/klauspost/compress v1.18.5/go.mod h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
@@ -28,6 +30,10 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 h1:YqAladjX7xpA6BM04leXMWAEjS0mTZ5kUU9KRBriQJc=
 github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5/go.mod h1:2JjD2zLQYH5HO74y5+aE3remJQvl6q4Sn6aWA2wD1Ng=
+github.com/tomkabel/browser-fingerprint-transport v0.1.0 h1:nDZ428bOFaXmEPpjcl5Sbd6ZensS0mV756//SSA1FSk=
+github.com/tomkabel/browser-fingerprint-transport v0.1.0/go.mod h1:Lg+avDAetxJ67rBSqQOrwjeGmYAJOFmuEBby3FM3Nr8=
+github.com/tomkabel/tls-client v1.7.7-barnius-4 h1:8m96kyDJ7gdhiO/B8n085iQJeGQpkqCjMHzF7x36NNA=
+github.com/tomkabel/tls-client v1.7.7-barnius-4/go.mod h1:bnPmX7eo3+sDL+4lRYfeNzQVc/CguIHYFRL4FxdDEPs=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 go.uber.org/mock v0.5.2 h1:LbtPTcP8A5k9WPXj54PPPbjcI4Y6lhyOZXn+VS7wNko=

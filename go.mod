@@ -1,6 +1,6 @@
 module github.com/tomkabel/fingerprintproxy
 
-go 1.24.1
+go 1.25.0
 
 require (
 	github.com/elazarl/goproxy v1.8.3
@@ -16,11 +16,10 @@ require (
 	github.com/bogdanfinn/quic-go-utls v1.0.9-utls // indirect
 	github.com/bogdanfinn/utls v1.7.7-barnius // indirect
 	github.com/bogdanfinn/websocket v1.5.5-barnius // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
+	github.com/tomkabel/tls-client v1.7.7-barnius-4 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
