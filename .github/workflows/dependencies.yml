@@ -1,0 +1,59 @@
+name: Dependencies
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0' # Weekly on Sunday
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  go-mod-updater:
+    name: Update Go Dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Update dependencies
+        run: |
+          go get -u ./...
+          go mod tidy
+
+      - name: Create PR with updates
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'chore(deps): update Go dependencies'
+          title: 'Chore: Update Go Dependencies'
+          body: |
+            This PR updates Go module dependencies.
+            
+            ## Update Summary
+            - Run `go mod tidy` to clean up dependencies
+            - Run `go get -u ./...` to update indirect dependencies
+            
+            Please review the changes before merging.
+          labels: dependencies, automated
+          branch: dependency-updates
+          delete-branch: true
+          draft: true
+
+  # Enable Dependabot for GitHub Actions as well
+  # Note: Add .github/dependabot.yml manually for Actions updates
