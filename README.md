@@ -88,12 +88,12 @@ curl -x http://localhost:8080 -H "X-Fingerprint: chrome" https://example.com
 │  (no fp needed) │──────│                                      │
 │                 │      │  X-Fingerprint: chrome_133           │
 └─────────────────┘      │  X-Fingerprint: firefox_147          │
-                          │  X-Fingerprint: safari_ios_18_5      │
-                          └──────────────────────────────────────┘
+                         │  X-Fingerprint: safari_ios_18_5      │
+                         └──────────────────────────────────────┘
                                             │
                                             ▼
                                ┌──────────────────────┐
-                               │   Target Server     │
+                               │   Target Server      │
                                └──────────────────────┘
 ```
 
