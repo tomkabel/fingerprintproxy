@@ -1,6 +1,16 @@
 # Fingerprint Proxy
 
+[![CI](https://github.com/tomkabel/fingerprintproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/tomkabel/fingerprintproxy/actions/workflows/ci.yml)
+[![Lint](https://github.com/tomkabel/fingerprintproxy/actions/workflows/lint.yml/badge.svg)](https://github.com/tomkabel/fingerprintproxy/actions/workflows/lint.yml)
+[![Security](https://github.com/tomkabel/fingerprintproxy/actions/workflows/security.yml/badge.svg)](https://github.com/tomkabel/fingerprintproxy/actions/workflows/security.yml)
+[![Dependencies](https://github.com/tomkabel/fingerprintproxy/actions/workflows/dependencies.yml/badge.svg)](https://github.com/tomkabel/fingerprintproxy/actions/workflows/dependencies.yml)
+[![Release](https://github.com/tomkabel/fingerprintproxy/actions/workflows/release.yml/badge.svg)](https://github.com/tomkabel/fingerprintproxy/actions/workflows/release.yml)
+[![Go Version](https://img.shields.io/badge/Go-1.25-blue)](https://go.dev)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+
 A standalone TLS fingerprinting forward proxy that applies browser TLS fingerprints to outbound requests based on the `X-Fingerprint` header.
+
+---
 
 ## Overview
 
@@ -73,18 +83,18 @@ curl -x http://localhost:8080 -H "X-Fingerprint: chrome" https://example.com
 ### Architecture
 
 ```
-┌─────────────────┐      ┌──────────────────────┐
-│  Main goproxy   │      │   Fingerprint Proxy  │
-│  (no fp needed) │──────│                      │
-│                 │      │ X-Fingerprint: chrome_133
-└─────────────────┘      │ X-Fingerprint: firefox_147
-                         │ X-Fingerprint: safari_ios_18_5
-                         └──────────────────────┘
-                                  │
-                                  ▼
-                         ┌──────────────────────┐
-                         │   Target Server     │
-                         └──────────────────────┘
+┌─────────────────┐      ┌──────────────────────────────────────┐
+│  Main goproxy   │      │         Fingerprint Proxy            │
+│  (no fp needed) │──────│                                      │
+│                 │      │  X-Fingerprint: chrome_133           │
+└─────────────────┘      │  X-Fingerprint: firefox_147          │
+                          │  X-Fingerprint: safari_ios_18_5      │
+                          └──────────────────────────────────────┘
+                                            │
+                                            ▼
+                               ┌──────────────────────┐
+                               │   Target Server     │
+                               └──────────────────────┘
 ```
 
 ### Usage with Main Proxy
@@ -152,4 +162,4 @@ Run `go run main.go -list` to see all 80+ available profiles including:
 
 ## License
 
-Part of the goproxy project with TLS fingerprinting extensions.
+MIT License - A standalone TLS fingerprinting forward proxy.
