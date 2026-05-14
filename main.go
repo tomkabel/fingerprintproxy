@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"log"
@@ -13,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,260 +24,88 @@ import (
 
 	"github.com/elazarl/goproxy"
 	"github.com/inconshreveable/go-vhost"
-	fingerprints "github.com/tomkabel/browser-fingerprint-transport"
+	"github.com/saucesteals/mimic"
 )
 
-// DefaultProfile is the profile used when no X-Fingerprint header is provided
 const DefaultProfile = "chrome_133"
+const DefaultVersion = "133.0.0.0"
 
-// FingerprintHeader is the header name used to specify the fingerprint profile
 const FingerprintHeader = "X-Fingerprint"
+const MimicVersionHeader = "X-Mimic-Version"
+const MimicBrandHeader = "X-Mimic-Brand"
+const MimicPlatformHeader = "X-Mimic-Platform"
 
-// Default cache TTL
-const defaultCacheTTL = 30 * time.Minute
+var (
+	uaChromeRegex = regexp.MustCompile(`chrome/(\d+)`)
+	uaEdgeRegex   = regexp.MustCompile(`edg(?:e|a)?/(\d+)`)
+)
 
-// MaxCacheEntries limits the number of cached transports
-const MaxCacheEntries = 20
-
-// TransportCache caches fingerprint transports by profile name with TTL-based eviction.
-type TransportCache struct {
-	transports map[string]*transportEntry
-	mu         sync.RWMutex
-	ttl        time.Duration
-	maxEntries int
-}
-
-type transportEntry struct {
-	transport http.RoundTripper
-	created   time.Time
-	lastUsed  time.Time
-}
-
-// NewTransportCache creates a new cache with the specified TTL and max entries.
-func NewTransportCache(ttl time.Duration, maxEntries int) *TransportCache {
-	return &TransportCache{
-		transports: make(map[string]*transportEntry),
-		ttl:        ttl,
-		maxEntries: maxEntries,
-	}
-}
-
-// GetOrCreate returns a cached http.RoundTripper for the given profile name.
-// It performs TTL-based eviction and respects maxEntries limit.
-func (tc *TransportCache) GetOrCreate(profileName string) (http.RoundTripper, error) {
-	// Check if already cached and valid (fast path with read lock)
-	tc.mu.RLock()
-	if entry, ok := tc.transports[profileName]; ok {
-		if time.Since(entry.lastUsed) < tc.ttl {
-			entry.lastUsed = time.Now()
-			tc.mu.RUnlock()
-			return entry.transport, nil
-		}
-		// Entry expired, will be evicted (but we need write lock for deletion)
-	}
-	tc.mu.RUnlock()
-
-	// Slow path: create new transport with write lock
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	// Double-check after acquiring write lock
-	if entry, ok := tc.transports[profileName]; ok {
-		if time.Since(entry.lastUsed) < tc.ttl {
-			entry.lastUsed = time.Now()
-			return entry.transport, nil
-		}
-		// Expired, remove it
-		delete(tc.transports, profileName)
-	}
-
-	// Validate profile exists
-	profile := fingerprints.GetProfile(profileName)
-	if profile == nil {
-		return nil, fmt.Errorf("unknown fingerprint profile: %s", profileName)
-	}
-
-	// Evict oldest entries if at capacity
-	if len(tc.transports) >= tc.maxEntries {
-		tc.evictOldest()
-	}
-
-	// Create new transport
-	config := fingerprints.NewConfig(
-		fingerprints.WithProfile(profile),
-	)
-
-	transport, err := fingerprints.NewFingerprintRoundTripper(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create transport for profile %s: %w", profileName, err)
-	}
-
-	now := time.Now()
-	tc.transports[profileName] = &transportEntry{
-		transport: transport,
-		created:   now,
-		lastUsed:  now,
-	}
-
-	log.Printf("[Transport] Created new transport for profile: %s", profileName)
-	return transport, nil
-}
-
-// evictOldest removes the least recently used transport from the cache.
-func (tc *TransportCache) evictOldest() {
-	var oldestKey string
-	var oldestTime time.Time
-
-	for key, entry := range tc.transports {
-		if oldestKey == "" || entry.lastUsed.Before(oldestTime) {
-			oldestKey = key
-			oldestTime = entry.lastUsed
-		}
-	}
-
-	if oldestKey != "" {
-		delete(tc.transports, oldestKey)
-		log.Printf("[Transport] Evicted oldest transport: %s", oldestKey)
-	}
-}
-
-// CloseIdleConnections closes idle connections on all cached transports.
-func (tc *TransportCache) CloseIdleConnections() {
-	tc.mu.RLock()
-	defer tc.mu.RUnlock()
-
-	for _, entry := range tc.transports {
-		if closer, ok := entry.transport.(interface{ CloseIdleConnections() }); ok {
-			closer.CloseIdleConnections()
-		}
-	}
-}
-
-// Len returns the number of cached transports.
-func (tc *TransportCache) Len() int {
-	tc.mu.RLock()
-	defer tc.mu.RUnlock()
-	return len(tc.transports)
-}
-
-// resolveProfileAlias handles common profile name variations
-func resolveProfileAlias(alias string) string {
-	aliases := map[string]string{
-		"chrome":   "chrome_133",
-		"chromium": "chrome_133",
-		"firefox":  "firefox_147",
-		"ff":       "firefox_147",
-		"safari":   "safari_18_5",
-		"ios":      "safari_ios_18_5",
-		"mobile":   "chrome_133",
-		"edge":     "chrome_133",
-	}
-
-	if resolved, ok := aliases[alias]; ok {
-		return resolved
-	}
-	return alias
-}
-
-// GetProfileFromRequest extracts the fingerprint profile name from the request.
-func GetProfileFromRequest(req *http.Request) (profileName string, isFallback bool) {
-	// Try X-Fingerprint header first
-	if fp := req.Header.Get(FingerprintHeader); fp != "" {
-		fp = strings.TrimSpace(strings.ToLower(fp))
-		if fingerprints.GetProfile(fp) != nil {
-			return fp, false
-		}
-		aliased := resolveProfileAlias(fp)
-		if fingerprints.GetProfile(aliased) != nil {
-			return aliased, false
-		}
-		log.Printf("[Warning] Invalid X-Fingerprint profile: %s, falling back", fp)
-	}
-
-	// Fall back to default
-	return DefaultProfile, true
-}
-
-// fingerprintRoundTripperWrapper wraps an http.RoundTripper to implement goproxy's RoundTripper interface.
-type fingerprintRoundTripperWrapper struct {
-	rt http.RoundTripper
-}
-
-func (w *fingerprintRoundTripperWrapper) RoundTrip(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Response, error) {
-	// Create a new request with context to support cancellation
-	newReq := req.WithContext(ctx.Req.Context())
-	return w.rt.RoundTrip(newReq)
-}
-
-// fingerprintProxy is the main proxy structure
 type fingerprintProxy struct {
-	proxy          *goproxy.ProxyHttpServer
-	transportCache *TransportCache
-	verbose        bool
-	certFile       string
-	keyFile        string
+	proxy              *goproxy.ProxyHttpServer
+	mimicCache         *MimicCache
+	insecureSkipVerify bool
+	verbose            bool
+	httpsWg            sync.WaitGroup
 }
 
-// NewFingerprintProxy creates a new fingerprint proxy with configurable options.
-func NewFingerprintProxy(verbose bool, certFile, keyFile string) *fingerprintProxy {
+type brandPrefix struct {
+	prefix string
+	brand  mimic.Brand
+}
+
+var orderedBrandPrefixes = []brandPrefix{
+	{"chrome_", mimic.BrandChrome},
+	{"chromium_", mimic.BrandChrome},
+	{"edge_", mimic.BrandEdge},
+	{"brave_", mimic.BrandBrave},
+	{"firefox_", mimic.BrandChrome},
+	{"safari_", mimic.BrandChrome},
+	{"opera_", mimic.BrandChrome},
+}
+
+func NewFingerprintProxy(verbose bool, insecureSkipVerify bool) *fingerprintProxy {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = verbose
 
 	fp := &fingerprintProxy{
-		proxy:          proxy,
-		transportCache: NewTransportCache(defaultCacheTTL, MaxCacheEntries),
-		verbose:        verbose,
-		certFile:       certFile,
-		keyFile:        keyFile,
+		proxy:              proxy,
+		mimicCache:         NewMimicCache(defaultCacheTTL, maxCacheEntries),
+		insecureSkipVerify: insecureSkipVerify,
+		verbose:            verbose,
 	}
 
 	fp.setupHandlers()
 	return fp
 }
 
-// setupHandlers configures the goproxy request handlers
 func (fp *fingerprintProxy) setupHandlers() {
-	// Compile regex once
 	allHosts := regexp.MustCompile(`^.*$`)
 
-	// Non-proxy handler for transparent mode
 	fp.proxy.NonproxyHandler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.Host == "" {
 			_, _ = fmt.Fprintln(w, "Cannot handle requests without Host header, e.g., HTTP 1.0")
 			return
 		}
-		req.URL.Scheme = "http"
+		if req.URL.Scheme == "" {
+			req.URL.Scheme = "https"
+		}
 		req.URL.Host = req.Host
 		fp.proxy.ServeHTTP(w, req)
 	})
 
-	// Always MITM for transparent proxy
 	fp.proxy.OnRequest(goproxy.ReqHostMatches(allHosts)).
 		HandleConnect(goproxy.AlwaysMitm)
 
-	// Main request handler
 	fp.proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-		profileName, isFallback := GetProfileFromRequest(req)
-
-		if isFallback {
-			ctx.Logf("[Fingerprint] Using fallback profile: %s (no X-Fingerprint header)", profileName)
-		} else {
-			ctx.Logf("[Fingerprint] Using X-Fingerprint profile: %s", profileName)
+		switch req.URL.Path {
+		case "/__ca__":
+			return fp.handleCAEndpoint(req, ctx)
+		case "/__help__":
+			return fp.handleHelpEndpoint(req, ctx)
+		case "/__profiles__":
+			return fp.handleProfilesEndpoint(req, ctx)
 		}
-
-		transport, err := fp.transportCache.GetOrCreate(profileName)
-		if err != nil {
-			ctx.Logf("[Error] Failed to get transport for profile %s: %v", profileName, err)
-			return nil, goproxy.NewResponse(req,
-				goproxy.ContentTypeText,
-				http.StatusInternalServerError,
-				fmt.Sprintf("Fingerprint error: %v", err))
-		}
-
-		ctx.RoundTripper = &fingerprintRoundTripperWrapper{rt: transport}
-		req.Header.Del(FingerprintHeader)
-
-		return req, nil
+		return fp.handleRequest(req, ctx)
 	})
 
 	fp.proxy.OnResponse().DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
@@ -284,43 +116,326 @@ func (fp *fingerprintProxy) setupHandlers() {
 	})
 }
 
-// Handler returns the HTTP handler for the proxy
+func (fp *fingerprintProxy) handleCAEndpoint(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+	derBytes := goproxy.GoproxyCa.Certificate[0]
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: derBytes,
+	})
+	return req, goproxy.NewResponse(req, "application/x-x509-ca-cert", http.StatusOK, string(pemBytes))
+}
+
+func (fp *fingerprintProxy) handleHelpEndpoint(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+	body := `Fingerprint Proxy v2 (mimic-based — Chromium TLS/HTTP2 emulation)
+
+Headers:
+  X-Fingerprint:       profile (chrome, edge, brave, firefox, safari, ios, chrome_120, etc.)
+  X-Mimic-Version:     Chromium version (e.g. "133" or "133.0.0.0")
+  X-Mimic-Brand:       "chrome", "brave", "edge"
+  X-Mimic-Platform:    "win", "mac", "linux"
+
+Note: Non-Chromium profiles (firefox, safari) fall back to Chromium emulation.
+
+Endpoints (accessible via proxy):
+  /__ca__              Download MITM CA certificate (import into Chrome)
+  /__help__            This help page
+  /__profiles__        List available profiles
+
+Chrome setup:
+  1. Set proxy to localhost:8080
+  2. Visit http://fingerprint-proxy/__ca__ to download CA cert
+  3. Import CA cert in chrome://settings/certificates (Authorities tab)
+  4. Trust it for website identification
+`
+	return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusOK, body)
+}
+
+func (fp *fingerprintProxy) handleProfilesEndpoint(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+	return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusOK, listProfilesText())
+}
+
+func (fp *fingerprintProxy) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+	spec := ResolveMimicSpec(req)
+	ctx.Logf("[Mimic] brand=%s version=%s platform=%s", spec.Brand, spec.Version, spec.Platform)
+
+	req.Header.Del(FingerprintHeader)
+	req.Header.Del(MimicVersionHeader)
+	req.Header.Del(MimicBrandHeader)
+	req.Header.Del(MimicPlatformHeader)
+
+	transport, err := fp.mimicCache.GetOrCreate(spec, fp.insecureSkipVerify)
+	if err != nil {
+		ctx.Logf("[Error] Failed to get mimic transport: %v", err)
+		return nil, goproxy.NewResponse(req,
+			goproxy.ContentTypeText,
+			http.StatusInternalServerError,
+			fmt.Sprintf("Mimic transport error: %v", err))
+	}
+
+	fReq, err := convertRequestToFHTTP(req)
+	if err != nil {
+		ctx.Logf("[Error] Request conversion failed: %v", err)
+		return nil, goproxy.NewResponse(req,
+			goproxy.ContentTypeText,
+			http.StatusInternalServerError,
+			fmt.Sprintf("Request conversion error: %v", err))
+	}
+
+	fResp, err := transport.RoundTrip(fReq)
+	if err != nil {
+		ctx.Logf("[Error] Round trip failed: %v", err)
+		return nil, goproxy.NewResponse(req,
+			goproxy.ContentTypeText,
+			http.StatusBadGateway,
+			fmt.Sprintf("Upstream error: %v", err))
+	}
+
+	resp, err := convertResponseFromFHTTP(fResp, req)
+	if err != nil {
+		ctx.Logf("[Error] Response conversion failed: %v", err)
+		return nil, goproxy.NewResponse(req,
+			goproxy.ContentTypeText,
+			http.StatusInternalServerError,
+			fmt.Sprintf("Response conversion error: %v", err))
+	}
+
+	return nil, resp
+}
+
+func ResolveMimicSpec(req *http.Request) MimicSpec {
+	brand := mimic.BrandChrome
+	version := DefaultVersion
+	platform := mimic.PlatformWindows
+
+	if b := req.Header.Get(MimicBrandHeader); b != "" {
+		switch strings.ToLower(strings.TrimSpace(b)) {
+		case "brave":
+			brand = mimic.BrandBrave
+		case "edge":
+			brand = mimic.BrandEdge
+		case "chrome", "chromium":
+			brand = mimic.BrandChrome
+		}
+	}
+
+	if v := req.Header.Get(MimicVersionHeader); v != "" {
+		version = parseVersion(v)
+	}
+
+	if p := req.Header.Get(MimicPlatformHeader); p != "" {
+		switch strings.ToLower(strings.TrimSpace(p)) {
+		case "mac", "macos", "darwin":
+			platform = mimic.PlatformMac
+		case "linux":
+			platform = mimic.PlatformLinux
+		case "win", "windows":
+			platform = mimic.PlatformWindows
+		}
+	}
+
+	if v := req.Header.Get(FingerprintHeader); v != "" {
+		spec := resolveFingerprintToMimic(strings.TrimSpace(strings.ToLower(v)))
+		if spec != nil {
+			brand = spec.Brand
+			version = spec.Version
+			platform = spec.Platform
+		}
+	} else {
+		spec := parseUserAgentForMimic(req.Header.Get("User-Agent"))
+		if spec != nil {
+			brand = spec.Brand
+			if spec.Version != "" {
+				version = spec.Version
+			}
+			platform = spec.Platform
+		}
+	}
+
+	return MimicSpec{Brand: brand, Version: version, Platform: platform}
+}
+
+func parseVersion(raw string) string {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return DefaultVersion
+	}
+
+	if !strings.Contains(v, ".") {
+		if major, err := strconv.Atoi(v); err == nil {
+			return strconv.Itoa(major) + ".0.0.0"
+		}
+		return DefaultVersion
+	}
+
+	parts := strings.SplitN(v, ".", 2)
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return DefaultVersion
+	}
+	return strconv.Itoa(major) + ".0.0.0"
+}
+
+func resolveFingerprintToMimic(fp string) *MimicSpec {
+	aliasToBrand := map[string]mimic.Brand{
+		"chrome":   mimic.BrandChrome,
+		"chromium": mimic.BrandChrome,
+		"edge":     mimic.BrandEdge,
+		"brave":    mimic.BrandBrave,
+		"mobile":   mimic.BrandChrome,
+	}
+
+	aliasToPlatform := map[string]mimic.Platform{
+		"chrome":   mimic.PlatformWindows,
+		"chromium": mimic.PlatformWindows,
+		"edge":     mimic.PlatformWindows,
+		"brave":    mimic.PlatformWindows,
+		"mobile":   mimic.PlatformLinux,
+		"firefox":  mimic.PlatformWindows,
+		"ff":       mimic.PlatformWindows,
+		"safari":   mimic.PlatformMac,
+		"ios":      mimic.PlatformMac,
+	}
+
+	for _, bp := range orderedBrandPrefixes {
+		if strings.HasPrefix(fp, bp.prefix) {
+			parts := strings.SplitN(fp, "_", 2)
+			version := DefaultVersion
+			if len(parts) >= 2 {
+				if v, err := strconv.Atoi(parts[1]); err == nil {
+					version = strconv.Itoa(v) + ".0.0.0"
+				}
+			}
+			platform := mimic.PlatformWindows
+			if fp == "safari" || strings.HasPrefix(fp, "safari") || fp == "ios" || strings.HasPrefix(fp, "safari_ios") {
+				platform = mimic.PlatformMac
+			}
+			return &MimicSpec{Brand: bp.brand, Version: version, Platform: platform}
+		}
+	}
+
+	if brand, ok := aliasToBrand[fp]; ok {
+		platform := mimic.PlatformWindows
+		if p, ok := aliasToPlatform[fp]; ok {
+			platform = p
+		}
+		return &MimicSpec{Brand: brand, Version: DefaultVersion, Platform: platform}
+	}
+
+	if _, ok := aliasToPlatform[fp]; ok {
+		return &MimicSpec{
+			Brand:    mimic.BrandChrome,
+			Version:  DefaultVersion,
+			Platform: aliasToPlatform[fp],
+		}
+	}
+
+	return nil
+}
+
+func parseUserAgentForMimic(ua string) *MimicSpec {
+	if ua == "" {
+		return nil
+	}
+	uaLower := strings.ToLower(ua)
+
+	spec := &MimicSpec{
+		Brand:    mimic.BrandChrome,
+		Version:  DefaultVersion,
+		Platform: mimic.PlatformWindows,
+	}
+
+	if strings.Contains(uaLower, "linux") || strings.Contains(uaLower, "x11") {
+		spec.Platform = mimic.PlatformLinux
+	} else if strings.Contains(uaLower, "mac") {
+		spec.Platform = mimic.PlatformMac
+	}
+
+	if strings.Contains(uaLower, "edg") || strings.Contains(uaLower, "edge") {
+		spec.Brand = mimic.BrandEdge
+		if m := uaEdgeRegex.FindStringSubmatch(uaLower); len(m) >= 2 {
+			spec.Version = m[1] + ".0.0.0"
+		}
+		return spec
+	}
+
+	if strings.Contains(uaLower, "brave") {
+		spec.Brand = mimic.BrandBrave
+		if m := uaChromeRegex.FindStringSubmatch(uaLower); len(m) >= 2 {
+			spec.Version = m[1] + ".0.0.0"
+		}
+		return spec
+	}
+
+	if strings.Contains(uaLower, "chrome") || strings.Contains(uaLower, "chromium") {
+		spec.Brand = mimic.BrandChrome
+		if m := uaChromeRegex.FindStringSubmatch(uaLower); len(m) >= 2 {
+			spec.Version = m[1] + ".0.0.0"
+		}
+		return spec
+	}
+
+	return nil
+}
+
+func listProfilesText() string {
+	var buf strings.Builder
+	buf.WriteString("Fingerprint Proxy v2 — Powered by mimic (Chromium TLS/HTTP2 emulation)\n\n")
+	buf.WriteString("Headers:\n")
+	buf.WriteString("  X-Fingerprint:  chrome, edge, brave, chrome_120, firefox, safari, ios, mobile\n")
+	buf.WriteString("  X-Mimic-Version:  Chromium major version (e.g. 133)\n")
+	buf.WriteString("  X-Mimic-Brand:    chrome | brave | edge\n")
+	buf.WriteString("  X-Mimic-Platform: win | mac | linux\n\n")
+	buf.WriteString("Non-Chromium profiles (firefox, safari) fall back to Chrome emulation.\n")
+	buf.WriteString("If no headers are set, User-Agent is parsed to auto-detect.\n")
+	buf.WriteString("Fallback: Chrome 133 on Windows.\n\n")
+	buf.WriteString("Supported Chromium versions: 100–137+\n\n")
+	buf.WriteString("Endpoints:\n")
+	buf.WriteString("  /__ca__       Download MITM CA certificate\n")
+	buf.WriteString("  /__help__     This help page\n")
+	return buf.String()
+}
+
+func isClosed(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "use of closed network connection")
+}
+
 func (fp *fingerprintProxy) Handler() http.Handler {
 	return fp.proxy
 }
 
-// Run starts the proxy server with graceful shutdown support.
 func (fp *fingerprintProxy) Run(httpAddr, httpsAddr string) error {
-	// Channel to receive shutdown signals
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	// HTTP server
 	httpServer := &http.Server{
 		Addr:    httpAddr,
 		Handler: fp.proxy,
 	}
 
-	// Start HTTP server in goroutine
 	go func() {
 		log.Printf("[Server] HTTP proxy listening on %s", httpAddr)
+		log.Printf("[Server] CA cert: visit http://127.0.0.1:8080/__ca__ via proxy to download")
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[Error] HTTP server error: %v", err)
 		}
 	}()
 
-	// HTTPS listener
 	ln, err := net.Listen("tcp", httpsAddr)
 	if err != nil {
 		return fmt.Errorf("error listening for HTTPS connections: %w", err)
 	}
 	log.Printf("[Server] HTTPS transparent proxy listening on %s", httpsAddr)
 
-	// Goroutine to accept HTTPS connections
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
+				if isClosed(err) {
+					return
+				}
 				select {
 				case <-quit:
 					return
@@ -329,34 +444,33 @@ func (fp *fingerprintProxy) Run(httpAddr, httpsAddr string) error {
 					continue
 				}
 			}
-			go fp.handleHTTPS(c)
+			fp.httpsWg.Add(1)
+			go func() {
+				defer fp.httpsWg.Done()
+				fp.handleHTTPS(c)
+			}()
 		}
 	}()
 
-	// Wait for shutdown signal
 	<-quit
 	log.Printf("[Server] Shutdown signal received, stopping servers...")
 
-	// Create shutdown context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Shutdown HTTP server
 	if err := httpServer.Shutdown(ctx); err != nil {
 		log.Printf("[Error] HTTP server shutdown error: %v", err)
 	}
 
-	// Close HTTPS listener
 	_ = ln.Close()
+	fp.httpsWg.Wait()
 
-	// Close idle connections in cache
-	fp.transportCache.CloseIdleConnections()
+	fp.mimicCache.CloseIdleConnections()
 	log.Printf("[Server] Shutdown complete")
 
 	return nil
 }
 
-// handleHTTPS handles an incoming HTTPS connection
 func (fp *fingerprintProxy) handleHTTPS(c net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -414,52 +528,37 @@ func (dumb *dumbResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return dumb, bufio.NewReadWriter(bufio.NewReader(dumb), bufio.NewWriter(dumb)), nil
 }
 
-func listProfiles() {
-	fmt.Println("Available fingerprint profiles:")
-	for _, name := range fingerprints.ListProfiles() {
-		profile := fingerprints.GetProfile(name)
-		if profile != nil {
-			fmt.Printf("  %-20s - %s (HTTP/3: %v, PSK: %v)\n",
-				name,
-				profile.Name(),
-				profile.SupportsHTTP3(),
-				profile.SupportsPSK(),
-			)
-		}
-	}
-	fmt.Printf("\nDefault profile: %s\n", DefaultProfile)
-	fmt.Println("\nYou can also use aliases: chrome, firefox, safari, edge, etc.")
-}
-
 func main() {
 	httpAddr := flag.String("http", ":8080", "HTTP proxy listen address")
 	httpsAddr := flag.String("https", ":8081", "HTTPS transparent proxy listen address")
-	profile := flag.String("profile", DefaultProfile, "Default fingerprint profile")
-	verbose := flag.Bool("v", true, "Enable verbose logging")
-	insecureSkipVerify := flag.Bool("insecure", false, "Skip TLS certificate verification (dangerous, for testing only)")
-	certFile := flag.String("cert", "", "TLS certificate file (for MITM)")
-	keyFile := flag.String("key", "", "TLS private key file")
-	listProfilesFlag := flag.Bool("list", false, "List available fingerprint profiles and exit")
+	verbose := flag.Bool("v", false, "Enable verbose logging")
+	insecureSkipVerify := flag.Bool("insecure", false, "Skip TLS certificate verification (dangerous)")
+	certFile := flag.String("cert", "", "TLS certificate file for custom MITM CA")
+	keyFile := flag.String("key", "", "TLS private key file for custom MITM CA")
+	listHelp := flag.Bool("help", false, "Show usage and exit")
 	flag.Parse()
 
-	if *listProfilesFlag {
-		listProfiles()
+	if *listHelp {
+		fmt.Print(listProfilesText())
 		os.Exit(0)
 	}
 
-	if fingerprints.GetProfile(*profile) == nil {
-		fmt.Printf("Error: Invalid default profile: %s\n", *profile)
-		fmt.Println("Use -list to see available profiles")
-		os.Exit(1)
+	if *certFile != "" && *keyFile != "" {
+		caCert, err := tls.LoadX509KeyPair(*certFile, *keyFile)
+		if err != nil {
+			log.Fatalf("[Fatal] Failed to load custom CA: %v", err)
+		}
+		caCert.Leaf, _ = x509.ParseCertificate(caCert.Certificate[0])
+		goproxy.GoproxyCa = caCert
+		log.Printf("[Startup] Using custom CA from %s/%s", *certFile, *keyFile)
 	}
 
-	log.Printf("[Startup] Fingerprint Proxy starting...")
-	log.Printf("[Startup] Default profile: %s", *profile)
+	log.Printf("[Startup] Fingerprint Proxy v2 (mimic) starting...")
 	log.Printf("[Startup] HTTP proxy: %s", *httpAddr)
 	log.Printf("[Startup] HTTPS transparent proxy: %s", *httpsAddr)
 	log.Printf("[Startup] InsecureSkipVerify: %v", *insecureSkipVerify)
 
-	proxy := NewFingerprintProxy(*verbose, *certFile, *keyFile)
+	proxy := NewFingerprintProxy(*verbose, *insecureSkipVerify)
 
 	if err := proxy.Run(*httpAddr, *httpsAddr); err != nil {
 		log.Fatalf("[Fatal] Failed to start proxy: %v", err)

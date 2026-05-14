@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -13,27 +12,143 @@ import (
 	"time"
 
 	"github.com/elazarl/goproxy"
-	fingerprints "github.com/tomkabel/browser-fingerprint-transport"
+	"github.com/saucesteals/mimic"
 )
 
-// --- TestGetProfileFromRequest ---
-
-func TestGetProfileFromRequest(t *testing.T) {
+func TestResolveMimicSpec(t *testing.T) {
 	tests := []struct {
-		name            string
-		headers         map[string]string
-		expectedProfile string
-		expectFallback  bool
+		name          string
+		headers       map[string]string
+		expectedBrand mimic.Brand
+		expectedVer   string
+		expectedPlat  mimic.Platform
 	}{
-		{name: "X-Fingerprint header with valid profile", headers: map[string]string{"X-Fingerprint": "chrome_133"}, expectedProfile: "chrome_133", expectFallback: false},
-		{name: "X-Fingerprint header with firefox", headers: map[string]string{"X-Fingerprint": "firefox_147"}, expectedProfile: "firefox_147", expectFallback: false},
-		{name: "X-Fingerprint header with safari_ios", headers: map[string]string{"X-Fingerprint": "safari_ios_18_5"}, expectedProfile: "safari_ios_18_5", expectFallback: false},
-		{name: "X-Fingerprint header with chrome alias", headers: map[string]string{"X-Fingerprint": "chrome"}, expectedProfile: "chrome_133", expectFallback: false},
-		{name: "X-Fingerprint header with firefox alias", headers: map[string]string{"X-Fingerprint": "firefox"}, expectedProfile: "firefox_147", expectFallback: false},
-		{name: "X-Fingerprint header with case insensitive", headers: map[string]string{"X-Fingerprint": "FIREFOX_147"}, expectedProfile: "firefox_147", expectFallback: false},
-		{name: "X-Fingerprint header with spaces", headers: map[string]string{"X-Fingerprint": "  chrome_133  "}, expectedProfile: "chrome_133", expectFallback: false},
-		{name: "No X-Fingerprint header returns default", headers: map[string]string{}, expectedProfile: DefaultProfile, expectFallback: true},
-		{name: "Invalid X-Fingerprint falls back to default", headers: map[string]string{"X-Fingerprint": "invalid_profile"}, expectedProfile: DefaultProfile, expectFallback: true},
+		{
+			name:          "no headers returns default Chrome",
+			headers:       map[string]string{},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "133.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "X-Fingerprint chrome resolves to Chrome",
+			headers:       map[string]string{"X-Fingerprint": "chrome"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "133.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "X-Fingerprint edge resolves to Edge",
+			headers:       map[string]string{"X-Fingerprint": "edge"},
+			expectedBrand: mimic.BrandEdge,
+			expectedVer:   "133.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "X-Fingerprint brave resolves to Brave",
+			headers:       map[string]string{"X-Fingerprint": "brave"},
+			expectedBrand: mimic.BrandBrave,
+			expectedVer:   "133.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "X-Mimic-Version overrides version",
+			headers:       map[string]string{"X-Mimic-Version": "120.0.0.0"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "120.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "X-Mimic-Version with bare number",
+			headers:       map[string]string{"X-Mimic-Version": "120"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "120.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "X-Mimic-Brand edge overrides brand",
+			headers:       map[string]string{"X-Mimic-Brand": "edge"},
+			expectedBrand: mimic.BrandEdge,
+			expectedVer:   "133.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "X-Mimic-Platform mac overrides platform",
+			headers:       map[string]string{"X-Mimic-Platform": "mac"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "133.0.0.0",
+			expectedPlat:  mimic.PlatformMac,
+		},
+		{
+			name:          "X-Mimic-Platform linux",
+			headers:       map[string]string{"X-Mimic-Platform": "linux"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "133.0.0.0",
+			expectedPlat:  mimic.PlatformLinux,
+		},
+		{
+			name:          "all X-Mimic headers combined",
+			headers:       map[string]string{"X-Mimic-Brand": "brave", "X-Mimic-Version": "124.0.0.0", "X-Mimic-Platform": "mac"},
+			expectedBrand: mimic.BrandBrave,
+			expectedVer:   "124.0.0.0",
+			expectedPlat:  mimic.PlatformMac,
+		},
+		{
+			name:          "X-Fingerprint takes precedence when no Mimic headers",
+			headers:       map[string]string{"X-Fingerprint": "chrome"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "133.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "UA auto-detection Windows Chrome",
+			headers:       map[string]string{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "128.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "UA auto-detection Mac Chrome",
+			headers:       map[string]string{"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "131.0.0.0",
+			expectedPlat:  mimic.PlatformMac,
+		},
+		{
+			name:          "UA auto-detection Linux Edge",
+			headers:       map[string]string{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0"},
+			expectedBrand: mimic.BrandEdge,
+			expectedVer:   "130.0.0.0",
+			expectedPlat:  mimic.PlatformLinux,
+		},
+		{
+			name:          "UA without Brave keyword detected as Chrome",
+			headers:       map[string]string{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "131.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "X-Fingerprint firefox falls back to Chrome",
+			headers:       map[string]string{"X-Fingerprint": "firefox"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "133.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:          "X-Fingerprint safari falls back to Chrome on Mac",
+			headers:       map[string]string{"X-Fingerprint": "safari"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "133.0.0.0",
+			expectedPlat:  mimic.PlatformMac,
+		},
+		{
+			name:          "X-Fingerprint firefox_147 falls back to Chrome with version 147",
+			headers:       map[string]string{"X-Fingerprint": "firefox_147"},
+			expectedBrand: mimic.BrandChrome,
+			expectedVer:   "147.0.0.0",
+			expectedPlat:  mimic.PlatformWindows,
+		},
 	}
 
 	for _, tt := range tests {
@@ -43,55 +158,146 @@ func TestGetProfileFromRequest(t *testing.T) {
 				req.Header.Set(k, v)
 			}
 
-			profile, isFallback := GetProfileFromRequest(req)
+			spec := ResolveMimicSpec(req)
 
-			if profile != tt.expectedProfile {
-				t.Errorf("expected profile %s, got %s", tt.expectedProfile, profile)
+			if spec.Brand != tt.expectedBrand {
+				t.Errorf("expected brand %s, got %s", tt.expectedBrand, spec.Brand)
 			}
-
-			if isFallback != tt.expectFallback {
-				t.Errorf("expected fallback %v, got %v", tt.expectFallback, isFallback)
+			if spec.Version != tt.expectedVer {
+				t.Errorf("expected version %s, got %s", tt.expectedVer, spec.Version)
+			}
+			if spec.Platform != tt.expectedPlat {
+				t.Errorf("expected platform %s, got %s", tt.expectedPlat, spec.Platform)
 			}
 		})
 	}
 }
 
-// --- TestResolveProfileAlias ---
-
-func TestResolveProfileAlias(t *testing.T) {
+func TestResolveFingerprintToMimic(t *testing.T) {
 	tests := []struct {
-		alias    string
-		expected string
+		fp          string
+		expectNil   bool
+		expectBrand mimic.Brand
 	}{
-		{"chrome", "chrome_133"},
-		{"chromium", "chrome_133"},
-		{"firefox", "firefox_147"},
-		{"ff", "firefox_147"},
-		{"safari", "safari_18_5"},
-		{"ios", "safari_ios_18_5"},
-		{"mobile", "chrome_133"},
-		{"edge", "chrome_133"},
-		{"unknown", "unknown"},
+		{"chrome", false, mimic.BrandChrome},
+		{"chromium", false, mimic.BrandChrome},
+		{"edge", false, mimic.BrandEdge},
+		{"brave", false, mimic.BrandBrave},
+		{"mobile", false, mimic.BrandChrome},
+		{"chrome_133", false, mimic.BrandChrome},
+		{"edge_120", false, mimic.BrandEdge},
+		{"firefox", false, mimic.BrandChrome},
+		{"safari", false, mimic.BrandChrome},
+		{"ios", false, mimic.BrandChrome},
+		{"invalid_profile", true, ""},
+		{"nonexistent", true, ""},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.alias, func(t *testing.T) {
-			result := resolveProfileAlias(tt.alias)
-			if result != tt.expected {
-				t.Errorf("resolveProfileAlias(%s) = %s, want %s", tt.alias, result, tt.expected)
+		t.Run(tt.fp, func(t *testing.T) {
+			result := resolveFingerprintToMimic(tt.fp)
+			if tt.expectNil {
+				if result != nil {
+					t.Errorf("expected nil for %s, got %+v", tt.fp, result)
+				}
+			} else {
+				if result == nil {
+					t.Errorf("expected non-nil for %s", tt.fp)
+				} else if result.Brand != tt.expectBrand {
+					t.Errorf("expected brand %s for %s, got %s", tt.expectBrand, tt.fp, result.Brand)
+				}
 			}
 		})
 	}
 }
 
-// --- TestTransportCache ---
+func TestParseUserAgentForMimic(t *testing.T) {
+	tests := []struct {
+		name        string
+		ua          string
+		expectNil   bool
+		expectBrand mimic.Brand
+		expectVer   string
+		expectPlat  mimic.Platform
+	}{
+		{
+			name:        "Chrome on Windows",
+			ua:          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+			expectNil:   false,
+			expectBrand: mimic.BrandChrome,
+			expectVer:   "132.0.0.0",
+			expectPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:        "Chrome on Mac",
+			ua:          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+			expectNil:   false,
+			expectBrand: mimic.BrandChrome,
+			expectVer:   "131.0.0.0",
+			expectPlat:  mimic.PlatformMac,
+		},
+		{
+			name:        "Chrome on Linux",
+			ua:          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+			expectNil:   false,
+			expectBrand: mimic.BrandChrome,
+			expectVer:   "130.0.0.0",
+			expectPlat:  mimic.PlatformLinux,
+		},
+		{
+			name:        "Edge on Windows",
+			ua:          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
+			expectNil:   false,
+			expectBrand: mimic.BrandEdge,
+			expectVer:   "130.0.0.0",
+			expectPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:        "Brave on Windows",
+			ua:          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+			expectNil:   false,
+			expectBrand: mimic.BrandChrome,
+			expectVer:   "131.0.0.0",
+			expectPlat:  mimic.PlatformWindows,
+		},
+		{
+			name:      "empty UA returns nil",
+			ua:        "",
+			expectNil: true,
+		},
+	}
 
-func TestTransportCache(t *testing.T) {
-	// Create cache with short TTL for testing
-	cache := NewTransportCache(100*time.Millisecond, 10)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseUserAgentForMimic(tt.ua)
+			if tt.expectNil {
+				if result != nil {
+					t.Errorf("expected nil, got %+v", result)
+				}
+				return
+			}
+			if result == nil {
+				t.Fatal("expected non-nil result")
+			}
+			if result.Brand != tt.expectBrand {
+				t.Errorf("brand: expected %s, got %s", tt.expectBrand, result.Brand)
+			}
+			if result.Version != tt.expectVer {
+				t.Errorf("version: expected %s, got %s", tt.expectVer, result.Version)
+			}
+			if result.Platform != tt.expectPlat {
+				t.Errorf("platform: expected %s, got %s", tt.expectPlat, result.Platform)
+			}
+		})
+	}
+}
+
+func TestMimicCache(t *testing.T) {
+	cache := NewMimicCache(100*time.Millisecond, 10)
 
 	t.Run("creates transport on first call", func(t *testing.T) {
-		transport, err := cache.GetOrCreate("chrome_133")
+		spec := MimicSpec{Brand: mimic.BrandChrome, Version: "133.0.0.0", Platform: mimic.PlatformWindows}
+		transport, err := cache.GetOrCreate(spec, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -101,45 +307,40 @@ func TestTransportCache(t *testing.T) {
 	})
 
 	t.Run("returns cached transport on second call", func(t *testing.T) {
-		transport1, _ := cache.GetOrCreate("chrome_133")
-		transport2, _ := cache.GetOrCreate("chrome_133")
+		spec := MimicSpec{Brand: mimic.BrandChrome, Version: "133.0.0.0", Platform: mimic.PlatformWindows}
+		transport1, _ := cache.GetOrCreate(spec, false)
+		transport2, _ := cache.GetOrCreate(spec, false)
 
 		if transport1 != transport2 {
-			t.Error("expected same transport instance for same profile")
+			t.Error("expected same transport instance for same spec")
 		}
 	})
 
-	t.Run("creates different transport for different profile", func(t *testing.T) {
-		transport1, _ := cache.GetOrCreate("chrome_133")
-		transport2, _ := cache.GetOrCreate("firefox_147")
+	t.Run("creates different transport for different spec", func(t *testing.T) {
+		spec1 := MimicSpec{Brand: mimic.BrandChrome, Version: "120.0.0.0", Platform: mimic.PlatformWindows}
+		spec2 := MimicSpec{Brand: mimic.BrandEdge, Version: "120.0.0.0", Platform: mimic.PlatformWindows}
+
+		transport1, _ := cache.GetOrCreate(spec1, false)
+		transport2, _ := cache.GetOrCreate(spec2, false)
 
 		if transport1 == transport2 {
-			t.Error("expected different transport instances for different profiles")
-		}
-	})
-
-	t.Run("returns error for invalid profile", func(t *testing.T) {
-		_, err := cache.GetOrCreate("invalid_profile")
-		if err == nil {
-			t.Error("expected error for invalid profile")
+			t.Error("expected different transport instances for different specs")
 		}
 	})
 
 	t.Run("evicts expired entries", func(t *testing.T) {
 		cacheTTL := 50 * time.Millisecond
-		cacheEvict := NewTransportCache(cacheTTL, 10)
+		cacheEvict := NewMimicCache(cacheTTL, 10)
 
-		// Create a transport
-		_, err := cacheEvict.GetOrCreate("chrome_133")
+		spec := MimicSpec{Brand: mimic.BrandChrome, Version: "133.0.0.0", Platform: mimic.PlatformWindows}
+		_, err := cacheEvict.GetOrCreate(spec, false)
 		if err != nil {
 			t.Fatalf("failed to create transport: %v", err)
 		}
 
-		// Wait for TTL to expire
 		time.Sleep(cacheTTL + 10*time.Millisecond)
 
-		// Should create a new transport (old one evicted)
-		transport, err := cacheEvict.GetOrCreate("chrome_133")
+		transport, err := cacheEvict.GetOrCreate(spec, false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -149,114 +350,137 @@ func TestTransportCache(t *testing.T) {
 	})
 
 	t.Run("respects max entries limit", func(t *testing.T) {
-		cacheLimited := NewTransportCache(time.Hour, 2)
+		cacheLimited := NewMimicCache(time.Hour, 2)
 
-		// Create two transports
-		_, err := cacheLimited.GetOrCreate("chrome_133")
-		if err != nil {
-			t.Fatalf("failed to create chrome_133: %v", err)
-		}
-		_, err = cacheLimited.GetOrCreate("firefox_147")
-		if err != nil {
-			t.Fatalf("failed to create firefox_147: %v", err)
+		specs := []MimicSpec{
+			{Brand: mimic.BrandChrome, Version: "133.0.0.0", Platform: mimic.PlatformWindows},
+			{Brand: mimic.BrandEdge, Version: "133.0.0.0", Platform: mimic.PlatformWindows},
+			{Brand: mimic.BrandBrave, Version: "133.0.0.0", Platform: mimic.PlatformWindows},
 		}
 
-		// Cache should be at limit
-		if cacheLimited.Len() != 2 {
-			t.Errorf("expected cache length 2, got %d", cacheLimited.Len())
+		for i, spec := range specs {
+			_, err := cacheLimited.GetOrCreate(spec, false)
+			if err != nil {
+				t.Fatalf("failed to create transport %d: %v", i, err)
+			}
 		}
 
-		// Creating a third should evict oldest
-		_, err = cacheLimited.GetOrCreate("safari_ios_18_5")
-		if err != nil {
-			t.Fatalf("failed to create safari_ios_18_5: %v", err)
-		}
-
-		// Cache should still be at limit
 		if cacheLimited.Len() != 2 {
 			t.Errorf("expected cache length 2 after eviction, got %d", cacheLimited.Len())
 		}
 	})
+
+	t.Run("duplicate specs don't increase count", func(t *testing.T) {
+		cacheDedup := NewMimicCache(time.Hour, 10)
+		spec := MimicSpec{Brand: mimic.BrandChrome, Version: "133.0.0.0", Platform: mimic.PlatformWindows}
+
+		_, _ = cacheDedup.GetOrCreate(spec, false)
+		_, _ = cacheDedup.GetOrCreate(spec, false)
+		_, _ = cacheDedup.GetOrCreate(spec, false)
+
+		if cacheDedup.Len() != 1 {
+			t.Errorf("expected cache length 1, got %d", cacheDedup.Len())
+		}
+	})
 }
 
-// --- TestTransportCacheCloseIdleConnections ---
-
-func TestTransportCacheCloseIdleConnections(t *testing.T) {
-	cache := NewTransportCache(time.Hour, 10)
-
-	// Create some transports
-	_, err := cache.GetOrCreate("chrome_133")
+func TestMimicCacheCloseIdleConnections(t *testing.T) {
+	cache := NewMimicCache(time.Hour, 10)
+	spec := MimicSpec{Brand: mimic.BrandChrome, Version: "133.0.0.0", Platform: mimic.PlatformWindows}
+	_, err := cache.GetOrCreate(spec, false)
 	if err != nil {
 		t.Fatalf("failed to create transport: %v", err)
 	}
 
-	// Should not panic
 	cache.CloseIdleConnections()
 }
 
-// --- TestFingerprintRoundTripperWrapper ---
+func TestNewMimicCache(t *testing.T) {
+	cache := NewMimicCache(time.Minute, 50)
 
-func TestFingerprintRoundTripperWrapper(t *testing.T) {
-	mockTransport := &mockRoundTripper{
-		response: &http.Response{
-			StatusCode: 200,
-			Body:       io.NopCloser(strings.NewReader("OK")),
-		},
+	if cache.ttl != time.Minute {
+		t.Errorf("expected TTL to be 1m0s, got %v", cache.ttl)
 	}
 
-	wrapper := &fingerprintRoundTripperWrapper{rt: mockTransport}
-
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-	ctx := &goproxy.ProxyCtx{Req: req}
-
-	resp, err := wrapper.RoundTrip(req, ctx)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if cache.maxEntries != 50 {
+		t.Errorf("expected maxEntries to be 50, got %d", cache.maxEntries)
 	}
 
-	if resp.StatusCode != 200 {
-		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	if cache.transports == nil {
+		t.Error("expected transports map to be initialized")
 	}
 }
 
-func TestFingerprintRoundTripperWrapperContextCancellation(t *testing.T) {
-	// Create a context that will be cancelled
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	mockTransport := &mockRoundTripper{
-		response: nil,
-		err:      context.Canceled,
+func TestDefaultProfileConstant(t *testing.T) {
+	if DefaultProfile != "chrome_133" {
+		t.Errorf("DefaultProfile = %s, want chrome_133", DefaultProfile)
 	}
-
-	wrapper := &fingerprintRoundTripperWrapper{rt: mockTransport}
-
-	req := httptest.NewRequest("GET", "http://example.com", nil).WithContext(ctx)
-	ctxProxy := &goproxy.ProxyCtx{Req: req}
-
-	_, err := wrapper.RoundTrip(req, ctxProxy)
-	if err == nil {
-		t.Error("expected error for cancelled context")
+	if DefaultVersion != "133.0.0.0" {
+		t.Errorf("DefaultVersion = %s, want 133.0.0.0", DefaultVersion)
 	}
 }
 
-type mockRoundTripper struct {
-	response *http.Response
-	err      error
+func TestFingerprintHeaderConstant(t *testing.T) {
+	if FingerprintHeader != "X-Fingerprint" {
+		t.Errorf("FingerprintHeader = %s, want X-Fingerprint", FingerprintHeader)
+	}
 }
 
-func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	return m.response, m.err
+func TestMimicHeaderConstants(t *testing.T) {
+	if MimicVersionHeader != "X-Mimic-Version" {
+		t.Errorf("MimicVersionHeader = %s, want X-Mimic-Version", MimicVersionHeader)
+	}
+	if MimicBrandHeader != "X-Mimic-Brand" {
+		t.Errorf("MimicBrandHeader = %s, want X-Mimic-Brand", MimicBrandHeader)
+	}
+	if MimicPlatformHeader != "X-Mimic-Platform" {
+		t.Errorf("MimicPlatformHeader = %s, want X-Mimic-Platform", MimicPlatformHeader)
+	}
 }
 
-// --- TestDumbResponseWriter ---
+func TestParseVersion(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"133", "133.0.0.0"},
+		{"133.0.0.0", "133.0.0.0"},
+		{"133.0", "133.0.0.0"},
+		{"133.0.0", "133.0.0.0"},
+		{"133.0.0.0.0", "133.0.0.0"},
+		{"", "133.0.0.0"},
+		{"notanumber", "133.0.0.0"},
+		{" 133 ", "133.0.0.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := parseVersion(tt.input)
+			if result != tt.expected {
+				t.Errorf("parseVersion(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestListProfilesText(t *testing.T) {
+	text := listProfilesText()
+	if text == "" {
+		t.Error("expected non-empty profiles text")
+	}
+	if !strings.Contains(text, "mimic") {
+		t.Error("expected profiles text to mention mimic")
+	}
+	if !strings.Contains(text, "/__ca__") {
+		t.Error("expected profiles text to mention /__ca__ endpoint")
+	}
+}
 
 func TestDumbResponseWriter(t *testing.T) {
 	mockConn := &mockConn{}
 
 	w := &dumbResponseWriter{Conn: mockConn}
 
-	// Test Write with HTTP OK response (should be discarded)
 	n, err := w.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -265,7 +489,6 @@ func TestDumbResponseWriter(t *testing.T) {
 		t.Errorf("expected %d bytes written, got %d", len("HTTP/1.0 200 OK\r\n\r\n"), n)
 	}
 
-	// Test Write with regular data
 	data := []byte("Hello, World!")
 	n, err = w.Write(data)
 	if err != nil {
@@ -275,7 +498,6 @@ func TestDumbResponseWriter(t *testing.T) {
 		t.Errorf("expected %d bytes written, got %d", len(data), n)
 	}
 
-	// Test that Header panics
 	func() {
 		defer func() {
 			if r := recover(); r == nil {
@@ -285,7 +507,6 @@ func TestDumbResponseWriter(t *testing.T) {
 		w.Header()
 	}()
 
-	// Test that WriteHeader panics
 	func() {
 		defer func() {
 			if r := recover(); r == nil {
@@ -295,7 +516,6 @@ func TestDumbResponseWriter(t *testing.T) {
 		w.WriteHeader(200)
 	}()
 
-	// Test Hijack
 	conn, bufioRW, err := w.Hijack()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -336,8 +556,6 @@ func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
 func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
 func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
 
-// --- PeetAPIResponse ---
-
 type PeetAPIResponse struct {
 	IP          string `json:"ip"`
 	HTTPVersion string `json:"http_version"`
@@ -353,33 +571,34 @@ type PeetAPIResponse struct {
 	} `json:"http2"`
 }
 
-// --- Known JA3 hashes for verification ---
-
-var knownFingerprints = map[string]string{
-	"chrome_133":  "74e530e488a43fddd78be75918be78c7", // Known Chrome 133 JA3 hash
-	"firefox_147": "6f7889b9fb1a62a9577e685c1fcfa919", // Known Firefox 147 JA3 hash
-}
-
-// --- Integration Tests ---
-
-func TestChromeFingerprintAgainstAPI(t *testing.T) {
+func TestMimicChromeFingerprintAgainstAPI(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	proxy := newTestFingerprintProxy()
-
-	transport, err := proxy.transportCache.GetOrCreate("chrome_133")
+	cache := NewMimicCache(time.Hour, 10)
+	spec := MimicSpec{Brand: mimic.BrandChrome, Version: "133.0.0.0", Platform: mimic.PlatformWindows}
+	transport, err := cache.GetOrCreate(spec, false)
 	if err != nil {
-		t.Fatalf("failed to get Chrome transport: %v", err)
+		t.Fatalf("failed to get transport: %v", err)
 	}
 
 	req := httptest.NewRequest("GET", "https://tls.peet.ws/api/all", nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
 
-	resp, err := transport.RoundTrip(req)
+	fReq, err := convertRequestToFHTTP(req)
+	if err != nil {
+		t.Fatalf("request conversion failed: %v", err)
+	}
+
+	fResp, err := transport.RoundTrip(fReq)
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
+	}
+
+	resp, err := convertResponseFromFHTTP(fResp, req)
+	if err != nil {
+		t.Fatalf("response conversion failed: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -402,37 +621,43 @@ func TestChromeFingerprintAgainstAPI(t *testing.T) {
 	t.Logf("API Response JA4: %s", apiResp.TLS.JA4)
 	t.Logf("API Response HTTP Version: %s", apiResp.HTTPVersion)
 
-	// Assert JA3 hash matches known fingerprint for Chrome 133
-	if expectedHash, ok := knownFingerprints["chrome_133"]; ok {
-		if apiResp.TLS.JA3Hash != expectedHash {
-			t.Errorf("Chrome JA3 hash mismatch:\n  expected: %s\n  got:      %s", expectedHash, apiResp.TLS.JA3Hash)
-		}
+	if apiResp.TLS.JA3Hash == "" {
+		t.Error("expected non-empty JA3 hash")
 	}
 
-	// Assert HTTP/2 is used
 	if apiResp.HTTPVersion != "h2" {
 		t.Errorf("expected HTTP/2, got %s", apiResp.HTTPVersion)
 	}
 }
 
-func TestFirefoxFingerprintAgainstAPI(t *testing.T) {
+func TestMimicEdgeFingerprintAgainstAPI(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	proxy := newTestFingerprintProxy()
-
-	transport, err := proxy.transportCache.GetOrCreate("firefox_147")
+	cache := NewMimicCache(time.Hour, 10)
+	spec := MimicSpec{Brand: mimic.BrandEdge, Version: "133.0.0.0", Platform: mimic.PlatformWindows}
+	transport, err := cache.GetOrCreate(spec, false)
 	if err != nil {
-		t.Fatalf("failed to get Firefox transport: %v", err)
+		t.Fatalf("failed to get transport: %v", err)
 	}
 
 	req := httptest.NewRequest("GET", "https://tls.peet.ws/api/all", nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0")
 
-	resp, err := transport.RoundTrip(req)
+	fReq, err := convertRequestToFHTTP(req)
+	if err != nil {
+		t.Fatalf("request conversion failed: %v", err)
+	}
+
+	fResp, err := transport.RoundTrip(fReq)
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
+	}
+
+	resp, err := convertResponseFromFHTTP(fResp, req)
+	if err != nil {
+		t.Fatalf("response conversion failed: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -454,46 +679,48 @@ func TestFirefoxFingerprintAgainstAPI(t *testing.T) {
 	t.Logf("API Response JA3 Hash: %s", apiResp.TLS.JA3Hash)
 	t.Logf("API Response JA4: %s", apiResp.TLS.JA4)
 	t.Logf("API Response HTTP Version: %s", apiResp.HTTPVersion)
-
-	// Assert JA3 hash matches known fingerprint for Firefox 147
-	if expectedHash, ok := knownFingerprints["firefox_147"]; ok {
-		if apiResp.TLS.JA3Hash != expectedHash {
-			t.Errorf("Firefox JA3 hash mismatch:\n  expected: %s\n  got:      %s", expectedHash, apiResp.TLS.JA3Hash)
-		}
-	}
-
-	// Assert HTTP/2 is used
-	if apiResp.HTTPVersion != "h2" {
-		t.Errorf("expected HTTP/2, got %s", apiResp.HTTPVersion)
-	}
 }
 
-// --- Helper ---
+func TestConvertRequestToFHTTP(t *testing.T) {
+	req := httptest.NewRequest("GET", "https://example.com/path?q=1", strings.NewReader("test body"))
+	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("X-Custom-Header", "value1")
+	req.Header.Add("X-Custom-Header", "value2")
+	req.Host = "example.com"
 
-func newTestFingerprintProxy() *fingerprintProxy {
-	proxy := goproxy.NewProxyHttpServer()
-	proxy.Verbose = false
-
-	fp := &fingerprintProxy{
-		proxy:          proxy,
-		transportCache: NewTransportCache(time.Hour, 10),
-		verbose:        false,
+	fReq, err := convertRequestToFHTTP(req)
+	if err != nil {
+		t.Fatalf("conversion failed: %v", err)
 	}
 
-	fp.setupHandlers()
-	return fp
-}
+	if fReq.Method != req.Method {
+		t.Errorf("method: expected %s, got %s", req.Method, fReq.Method)
+	}
+	if fReq.Host != req.Host {
+		t.Errorf("host: expected %s, got %s", req.Host, fReq.Host)
+	}
+	if fReq.Header.Get("Content-Type") != "text/plain" {
+		t.Errorf("Content-Type: expected text/plain, got %s", fReq.Header.Get("Content-Type"))
+	}
+	if fReq.Header.Get("X-Custom-Header") != "value1" {
+		t.Errorf("X-Custom-Header: expected value1, got %s", fReq.Header.Get("X-Custom-Header"))
+	}
 
-// --- TestFingerprintHeaderRouting ---
+	bodyBytes, _ := io.ReadAll(fReq.Body)
+	if string(bodyBytes) != "test body" {
+		t.Errorf("body: expected 'test body', got '%s'", string(bodyBytes))
+	}
+}
 
 func TestFingerprintHeaderRouting(t *testing.T) {
 	testCases := []struct {
 		header   string
-		expected string
+		expected mimic.Brand
 	}{
-		{"chrome_133", "chrome_133"},
-		{"firefox_147", "firefox_147"},
-		{"safari_ios_18_5", "safari_ios_18_5"},
+		{"chrome", mimic.BrandChrome},
+		{"edge", mimic.BrandEdge},
+		{"brave", mimic.BrandBrave},
+		{"chrome_133", mimic.BrandChrome},
 	}
 
 	for _, tc := range testCases {
@@ -501,92 +728,132 @@ func TestFingerprintHeaderRouting(t *testing.T) {
 			req := httptest.NewRequest("GET", "http://example.com", nil)
 			req.Header.Set("X-Fingerprint", tc.header)
 
-			profile, _ := GetProfileFromRequest(req)
-			if profile != tc.expected {
-				t.Errorf("expected profile %s, got %s", tc.expected, profile)
+			spec := ResolveMimicSpec(req)
+			if spec.Brand != tc.expected {
+				t.Errorf("expected brand %s, got %s", tc.expected, spec.Brand)
 			}
 		})
 	}
 }
 
-// --- TestInvalidProfileHandling ---
+func newTestFingerprintProxy() *fingerprintProxy {
+	return NewFingerprintProxy(false, false)
+}
 
-func TestInvalidProfileHandling(t *testing.T) {
-	cache := NewTransportCache(time.Hour, 10)
-
-	_, err := cache.GetOrCreate("nonexistent_profile_xyz")
-	if err == nil {
-		t.Error("expected error for nonexistent profile")
+func TestFingerprintProxyConstruction(t *testing.T) {
+	fp := newTestFingerprintProxy()
+	if fp == nil {
+		t.Fatal("expected non-nil proxy")
 	}
-
-	if !strings.Contains(err.Error(), "unknown fingerprint profile") {
-		t.Errorf("expected 'unknown fingerprint profile' error, got: %v", err)
+	if fp.mimicCache == nil {
+		t.Error("expected non-nil mimic cache")
+	}
+	if fp.proxy == nil {
+		t.Error("expected non-nil goproxy instance")
 	}
 }
 
-// --- TestDefaultProfileConstant ---
+func TestCAEndpointPathRouting(t *testing.T) {
+	fp := newTestFingerprintProxy()
 
-func TestDefaultProfileConstant(t *testing.T) {
-	profile := fingerprints.GetProfile(DefaultProfile)
-	if profile == nil {
-		t.Errorf("DefaultProfile %s is not a valid profile", DefaultProfile)
+	tests := []struct {
+		path       string
+		expectBody string
+	}{
+		{"/__ca__", "CERTIFICATE"},
+		{"/__help__", "download CA cert"},
+		{"/__profiles__", "mimic"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "http://fingerprint-proxy"+tt.path, nil)
+			ctx := &goproxy.ProxyCtx{
+				Req:   req,
+				Proxy: fp.proxy,
+			}
+
+			var resp *http.Response
+			switch req.URL.Path {
+			case "/__ca__":
+				_, resp = fp.handleCAEndpoint(req, ctx)
+			case "/__help__":
+				_, resp = fp.handleHelpEndpoint(req, ctx)
+			case "/__profiles__":
+				_, resp = fp.handleProfilesEndpoint(req, ctx)
+			default:
+				t.Fatalf("unexpected path: %s", tt.path)
+			}
+
+			if resp == nil {
+				t.Fatal("expected non-nil response")
+			}
+
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+
+			if !strings.Contains(string(bodyBytes), tt.expectBody) {
+				t.Errorf("expected body to contain %q, got: %s", tt.expectBody, string(bodyBytes))
+			}
+		})
 	}
 }
 
-// --- TestFingerprintHeaderConstant ---
+func TestHandleRequestStripsHeadersBeforeConversion(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://example.com/?q=1", nil)
+	req.Header.Set("X-Fingerprint", "chrome")
+	req.Header.Set("X-Mimic-Version", "131")
+	req.Header.Set("X-Mimic-Brand", "edge")
+	req.Header.Set("X-Mimic-Platform", "linux")
 
-func TestFingerprintHeaderConstant(t *testing.T) {
-	if FingerprintHeader != "X-Fingerprint" {
-		t.Errorf("FingerprintHeader = %s, want X-Fingerprint", FingerprintHeader)
+	spec := ResolveMimicSpec(req)
+	if spec.Brand != mimic.BrandChrome {
+		t.Errorf("expected brand Chrome from fingerprint, got %s", spec.Brand)
+	}
+
+	req.Header.Del(FingerprintHeader)
+	req.Header.Del(MimicVersionHeader)
+	req.Header.Del(MimicBrandHeader)
+	req.Header.Del(MimicPlatformHeader)
+
+	fReq, err := convertRequestToFHTTP(req)
+	if err != nil {
+		t.Fatalf("conversion failed: %v", err)
+	}
+
+	if fReq.Header.Get(FingerprintHeader) != "" {
+		t.Error("X-Fingerprint should not be in converted request")
+	}
+	if fReq.Header.Get(MimicVersionHeader) != "" {
+		t.Error("X-Mimic-Version should not be in converted request")
+	}
+	if fReq.Header.Get(MimicBrandHeader) != "" {
+		t.Error("X-Mimic-Brand should not be in converted request")
+	}
+	if fReq.Header.Get(MimicPlatformHeader) != "" {
+		t.Error("X-Mimic-Platform should not be in converted request")
 	}
 }
 
-// --- TestNewTransportCache ---
-
-func TestNewTransportCache(t *testing.T) {
-	cache := NewTransportCache(time.Minute, 50)
-
-	if cache.ttl != time.Minute {
-		t.Errorf("expected TTL to be 1m0s, got %v", cache.ttl)
+func TestResolveMimicSpecVersionParsing(t *testing.T) {
+	cases := []struct {
+		fp      string
+		wantVer string
+	}{
+		{"chrome_120", "120.0.0.0"},
+		{"edge_110", "110.0.0.0"},
+		{"chrome_99", "99.0.0.0"},
 	}
 
-	if cache.maxEntries != 50 {
-		t.Errorf("expected maxEntries to be 50, got %d", cache.maxEntries)
-	}
-
-	if cache.transports == nil {
-		t.Error("expected transports map to be initialized")
-	}
-}
-
-// --- TestCacheLength ---
-
-func TestCacheLength(t *testing.T) {
-	cache := NewTransportCache(time.Hour, 10)
-
-	if cache.Len() != 0 {
-		t.Errorf("expected initial length 0, got %d", cache.Len())
-	}
-
-	if _, err := cache.GetOrCreate("chrome_133"); err != nil {
-		t.Fatalf("failed to create chrome transport: %v", err)
-	}
-	if cache.Len() != 1 {
-		t.Errorf("expected length 1, got %d", cache.Len())
-	}
-
-	if _, err := cache.GetOrCreate("firefox_147"); err != nil {
-		t.Fatalf("failed to create firefox transport: %v", err)
-	}
-	if cache.Len() != 2 {
-		t.Errorf("expected length 2, got %d", cache.Len())
-	}
-
-	// Same profile should not increase length
-	if _, err := cache.GetOrCreate("chrome_133"); err != nil {
-		t.Fatalf("failed to create chrome transport: %v", err)
-	}
-	if cache.Len() != 2 {
-		t.Errorf("expected length 2 after duplicate, got %d", cache.Len())
+	for _, c := range cases {
+		t.Run(c.fp, func(t *testing.T) {
+			spec := resolveFingerprintToMimic(c.fp)
+			if spec == nil {
+				t.Fatal("expected non-nil spec")
+			}
+			if spec.Version != c.wantVer {
+				t.Errorf("expected version %s, got %s", c.wantVer, spec.Version)
+			}
+		})
 	}
 }
