@@ -3,19 +3,24 @@ module github.com/tomkabel/fingerprintproxy
 go 1.25.0
 
 require (
-	github.com/elazarl/goproxy v1.8.3
+	github.com/bogdanfinn/tls-client v1.14.0
+	github.com/elazarl/goproxy v1.8.4
 	github.com/inconshreveable/go-vhost v1.0.0
-	github.com/saucesteals/fhttp v1.0.1
-	github.com/saucesteals/mimic v1.0.1
 )
 
 require (
-	github.com/andybalholm/brotli v1.0.6 // indirect
-	github.com/cloudflare/circl v1.5.0 // indirect
-	github.com/klauspost/compress v1.17.4 // indirect
-	github.com/refraction-networking/utls v1.7.4-0.20250519154908-0557f61cb0b8 // indirect
-	golang.org/x/crypto v0.41.0 // indirect
-	golang.org/x/net v0.43.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
-	golang.org/x/text v0.28.0 // indirect
+	github.com/andybalholm/brotli v1.2.1 // indirect
+	github.com/bdandy/go-errors v1.2.2 // indirect
+	github.com/bdandy/go-socks4 v1.2.3 // indirect
+	github.com/bogdanfinn/fhttp v0.6.8 // indirect
+	github.com/bogdanfinn/quic-go-utls v1.0.9-utls // indirect
+	github.com/bogdanfinn/utls v1.7.7-barnius // indirect
+	github.com/bogdanfinn/websocket v1.5.5-barnius // indirect
+	github.com/klauspost/compress v1.18.6 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
+	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 )
