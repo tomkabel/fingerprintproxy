@@ -19,10 +19,9 @@ This proxy acts as a plug-and-play forward proxy that can be used via `HTTP_PROX
 ## Features
 
 - **Per-request fingerprint selection** via `X-Fingerprint` header
-- **Fallback to User-Agent parsing** when no `X-Fingerprint` header is present
 - **Transport pooling** for connection reuse per fingerprint profile
 - **MITM support** for transparent HTTPS interception
-- **Support for 80+ browser profiles** (Chrome, Firefox, Safari, etc.)
+- **Support for 65+ browser profiles** (Chrome, Firefox, Safari, etc.)
 
 ## Quick Start
 
@@ -73,7 +72,7 @@ curl -x http://localhost:8080 -H "X-Fingerprint: chrome" https://example.com
 |----------|----------------|
 | `chrome` | `chrome_133`   |
 | `firefox`| `firefox_147`  |
-| `safari` | `safari_18_5`  |
+| `safari` | `safari_16_0`  |
 | `edge`   | `chrome_133`   |
 | `ios`    | `safari_ios_18_5` |
 | `mobile` | `chrome_133`   |
@@ -139,7 +138,7 @@ curl -x http://localhost:8080 \
 -http :8080           HTTP proxy listen address (default: :8080)
 -https :8081          HTTPS transparent proxy listen address (default: :8081)
 -profile chrome_133   Default fingerprint profile (default: chrome_133)
--v                   Enable verbose logging (default: true)
+-v                   Enable verbose logging (default: false)
 -list                 List available profiles and exit
 ```
 
