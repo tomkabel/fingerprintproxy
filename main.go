@@ -86,29 +86,14 @@ func cacheKey(profileName, proxyURL string) string {
 func (tc *TransportCache) GetOrCreate(profileName, proxyURL string) (http.RoundTripper, error) {
 	key := cacheKey(profileName, proxyURL)
 
-	// Check if already cached and valid (fast path with read lock)
-	tc.mu.RLock()
-	if entry, ok := tc.transports[key]; ok {
-		if time.Since(entry.lastUsed) < tc.ttl {
-			entry.lastUsed = time.Now()
-			tc.mu.RUnlock()
-			return entry.transport, nil
-		}
-		// Entry expired, will be evicted (but we need write lock for deletion)
-	}
-	tc.mu.RUnlock()
-
-	// Slow path: create new transport with write lock
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	// Double-check after acquiring write lock
 	if entry, ok := tc.transports[key]; ok {
 		if time.Since(entry.lastUsed) < tc.ttl {
 			entry.lastUsed = time.Now()
 			return entry.transport, nil
 		}
-		// Expired, remove it
 		delete(tc.transports, key)
 	}
 
@@ -243,9 +228,7 @@ type fingerprintRoundTripperWrapper struct {
 }
 
 func (w *fingerprintRoundTripperWrapper) RoundTrip(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Response, error) {
-	// Create a new request with context to support cancellation
-	newReq := req.WithContext(ctx.Req.Context())
-	return w.rt.RoundTrip(newReq)
+	return w.rt.RoundTrip(ctx.Req)
 }
 
 // tlsClientRoundTripper wraps tls_client.HttpClient to implement http.RoundTripper.
@@ -349,6 +332,7 @@ type fingerprintProxy struct {
 	insecureSkipVerify bool
 	httpAddr           string
 	httpsAddr          string
+	connWg             sync.WaitGroup
 }
 
 // NewFingerprintProxy creates a new fingerprint proxy with configurable options.
@@ -471,12 +455,30 @@ func (fp *fingerprintProxy) Run(httpAddr, httpsAddr string) error {
 					continue
 				}
 			}
-			go fp.handleHTTPS(c)
+			fp.connWg.Add(1)
+			go func() {
+				defer fp.connWg.Done()
+				fp.handleHTTPS(c)
+			}()
 		}
 	}()
 
 	<-ctx.Done()
 	log.Printf("[Server] Shutdown signal received, stopping servers...")
+
+	_ = ln.Close()
+
+	done := make(chan struct{})
+	go func() {
+		fp.connWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		log.Printf("[Server] All HTTPS connections drained")
+	case <-time.After(10 * time.Second):
+		log.Printf("[Server] Timed out waiting for HTTPS connections to drain")
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -504,7 +506,7 @@ func (fp *fingerprintProxy) handleHTTPS(c net.Conn) {
 	}
 
 	if tlsConn.Host() == "" {
-		log.Printf("[Warning] Cannot support non-SNI enabled clients")
+		log.Printf("[Warning] Cannot support non-SNI enabled clients from %s", c.RemoteAddr())
 		return
 	}
 
@@ -525,7 +527,11 @@ func (fp *fingerprintProxy) handleHTTPS(c net.Conn) {
 
 type dumbResponseWriter struct {
 	net.Conn
-	header http.Header
+	header          http.Header
+	connectBuf      bytes.Buffer
+	headerSent      bool
+	connectComplete bool
+	statusCode      int
 }
 
 func (dumb *dumbResponseWriter) Header() http.Header {
@@ -536,14 +542,23 @@ func (dumb *dumbResponseWriter) Header() http.Header {
 }
 
 func (dumb *dumbResponseWriter) Write(buf []byte) (int, error) {
-	if bytes.HasPrefix(buf, []byte("HTTP/1.0 200")) || bytes.HasPrefix(buf, []byte("HTTP/1.1 200")) {
-		return len(buf), nil
+	if dumb.connectComplete {
+		return dumb.Conn.Write(buf)
 	}
-	return dumb.Conn.Write(buf)
+	if !dumb.headerSent || dumb.statusCode != http.StatusOK {
+		return dumb.Conn.Write(buf)
+	}
+	dumb.connectBuf.Write(buf)
+	if bytes.Index(dumb.connectBuf.Bytes(), []byte("\r\n\r\n")) >= 0 {
+		dumb.connectComplete = true
+		dumb.connectBuf.Reset()
+	}
+	return len(buf), nil
 }
 
 func (dumb *dumbResponseWriter) WriteHeader(code int) {
-	// Silently accept any status code — goproxy handles the protocol write.
+	dumb.headerSent = true
+	dumb.statusCode = code
 }
 
 func (dumb *dumbResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {

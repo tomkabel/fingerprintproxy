@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	fhttp "github.com/bogdanfinn/fhttp"
 	"github.com/elazarl/goproxy"
 )
 
@@ -270,79 +272,171 @@ func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 // --- TestDumbResponseWriter ---
 
 func TestDumbResponseWriter(t *testing.T) {
-	mockConn := &mockConn{}
+	t.Run("passes through data before WriteHeader", func(t *testing.T) {
+		mockConn := &mockConn{}
+		w := &dumbResponseWriter{Conn: mockConn}
 
-	w := &dumbResponseWriter{Conn: mockConn}
+		data := []byte("Hello, World!")
+		n, err := w.Write(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if n != len(data) {
+			t.Errorf("expected %d bytes written, got %d", len(data), n)
+		}
+		buf, err := mockConn.ReadWritten()
+		if err != nil {
+			t.Fatalf("unexpected read error: %v", err)
+		}
+		if !bytes.Equal(buf, data) {
+			t.Errorf("expected %q on conn, got %q", data, buf)
+		}
+	})
 
-	// Test Write with HTTP/1.0 OK response (should be discarded)
-	n, err := w.Write([]byte("HTTP/1.0 200 OK\r\n\r\n"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n != len("HTTP/1.0 200 OK\r\n\r\n") {
-		t.Errorf("expected %d bytes written, got %d", len("HTTP/1.0 200 OK\r\n\r\n"), n)
-	}
+	t.Run("swallows CONNECT response header after WriteHeader", func(t *testing.T) {
+		mockConn := &mockConn{}
+		w := &dumbResponseWriter{Conn: mockConn}
 
-	// Test Write with HTTP/1.1 OK response (should be discarded)
-	n, err = w.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n != len("HTTP/1.1 200 Connection Established\r\n\r\n") {
-		t.Errorf("expected %d bytes written, got %d", len("HTTP/1.1 200 Connection Established\r\n\r\n"), n)
-	}
+		w.WriteHeader(200)
+		n, err := w.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if n != len("HTTP/1.1 200 Connection Established\r\n\r\n") {
+			t.Errorf("expected %d bytes written, got %d", len("HTTP/1.1 200 Connection Established\r\n\r\n"), n)
+		}
+		written, err := mockConn.ReadWritten()
+		if err != nil {
+			t.Fatalf("unexpected read error: %v", err)
+		}
+		if len(written) != 0 {
+			t.Errorf("expected CONNECT response to be swallowed, got %q", written)
+		}
+	})
 
-	// Test Write with regular data (should pass through to conn)
-	data := []byte("Hello, World!")
-	n, err = w.Write(data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n != len(data) {
-		t.Errorf("expected %d bytes written, got %d", len(data), n)
-	}
+	t.Run("passes through data after CONNECT header is swallowed", func(t *testing.T) {
+		mockConn := &mockConn{}
+		w := &dumbResponseWriter{Conn: mockConn}
 
-	// Test Header returns non-nil (no longer panics)
-	h := w.Header()
-	if h == nil {
-		t.Error("expected non-nil header from Header()")
-	}
+		w.WriteHeader(200)
+		w.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
-	// Test WriteHeader no longer panics
-	w.WriteHeader(200)
+		data := []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+		n, err := w.Write(data)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if n != len(data) {
+			t.Errorf("expected %d bytes written, got %d", len(data), n)
+		}
+		written, err := mockConn.ReadWritten()
+		if err != nil {
+			t.Fatalf("unexpected read error: %v", err)
+		}
+		if !bytes.Equal(written, data) {
+			t.Errorf("expected %q on conn, got %q", data, written)
+		}
+	})
 
-	// Test Hijack
-	conn, bufioRW, err := w.Hijack()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if conn == nil {
-		t.Error("expected non-nil connection from Hijack")
-	}
-	if bufioRW == nil {
-		t.Error("expected non-nil bufio.ReadWriter from Hijack")
-	}
+	t.Run("handles fragmented CONNECT header", func(t *testing.T) {
+		mockConn := &mockConn{}
+		w := &dumbResponseWriter{Conn: mockConn}
+
+		w.WriteHeader(200)
+		w.Write([]byte("HTTP/1.1 200 "))
+		w.Write([]byte("Connection Established\r\n"))
+		w.Write([]byte("\r\n"))
+		w.Write([]byte("actual data"))
+		written, err := mockConn.ReadWritten()
+		if err != nil {
+			t.Fatalf("unexpected read error: %v", err)
+		}
+		if !bytes.Equal(written, []byte("actual data")) {
+			t.Errorf("expected %q on conn, got %q", "actual data", written)
+		}
+	})
+
+	t.Run("does not swallow 502 error response", func(t *testing.T) {
+		mockConn := &mockConn{}
+		w := &dumbResponseWriter{Conn: mockConn}
+
+		w.WriteHeader(502)
+		errorResp := []byte("HTTP/1.1 502 Bad Gateway\r\n\r\nerror body")
+		n, err := w.Write(errorResp)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if n != len(errorResp) {
+			t.Errorf("expected %d bytes written, got %d", len(errorResp), n)
+		}
+		written, err := mockConn.ReadWritten()
+		if err != nil {
+			t.Fatalf("unexpected read error: %v", err)
+		}
+		if !bytes.Equal(written, errorResp) {
+			t.Errorf("expected %q on conn, got %q", errorResp, written)
+		}
+	})
+
+	t.Run("Header returns non-nil", func(t *testing.T) {
+		w := &dumbResponseWriter{}
+		h := w.Header()
+		if h == nil {
+			t.Error("expected non-nil header from Header()")
+		}
+	})
+
+	t.Run("WriteHeader does not panic", func(t *testing.T) {
+		w := &dumbResponseWriter{}
+		w.WriteHeader(200)
+	})
+
+	t.Run("Hijack returns usable objects", func(t *testing.T) {
+		mockConn := &mockConn{}
+		w := &dumbResponseWriter{Conn: mockConn}
+		conn, bufioRW, err := w.Hijack()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if conn == nil {
+			t.Error("expected non-nil connection from Hijack")
+		}
+		if bufioRW == nil {
+			t.Error("expected non-nil bufio.ReadWriter from Hijack")
+		}
+	})
 }
 
 type mockConn struct {
-	readData []byte
-	writeMu  sync.Mutex
+	mu       sync.Mutex
+	readBuf  []byte
+	writeBuf bytes.Buffer
 }
 
 func (m *mockConn) Read(b []byte) (n int, err error) {
-	if len(m.readData) == 0 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.readBuf) == 0 {
 		return 0, io.EOF
 	}
-	n = copy(b, m.readData)
-	m.readData = m.readData[n:]
+	n = copy(b, m.readBuf)
+	m.readBuf = m.readBuf[n:]
 	return n, nil
 }
 
 func (m *mockConn) Write(b []byte) (n int, err error) {
-	m.writeMu.Lock()
-	defer m.writeMu.Unlock()
-	m.readData = append(m.readData, b...)
-	return len(b), nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.writeBuf.Write(b)
+}
+
+func (m *mockConn) ReadWritten() ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	data := make([]byte, m.writeBuf.Len())
+	copy(data, m.writeBuf.Bytes())
+	m.writeBuf.Reset()
+	return data, nil
 }
 
 func (m *mockConn) Close() error                       { return nil }
@@ -351,6 +445,101 @@ func (m *mockConn) RemoteAddr() net.Addr               { return nil }
 func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
 func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
 func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
+
+// --- TestRequestConversion ---
+
+func TestNetHttpRequestToFhttp(t *testing.T) {
+	t.Run("converts basic request", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "http://example.com/path?q=1", strings.NewReader("body"))
+		req.Host = "example.com"
+		req.Header.Set("X-Custom", "value")
+
+		freq, err := netHttpRequestToFhttp(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if freq.Method != "GET" {
+			t.Errorf("expected Method=GET, got %s", freq.Method)
+		}
+		if freq.Host != "example.com" {
+			t.Errorf("expected Host=example.com, got %s", freq.Host)
+		}
+		if freq.Header.Get("X-Custom") != "value" {
+			t.Errorf("expected X-Custom=value, got %s", freq.Header.Get("X-Custom"))
+		}
+	})
+
+	t.Run("handles nil URL", func(t *testing.T) {
+		req := &http.Request{Method: "GET"}
+		_, err := netHttpRequestToFhttp(req)
+		if err == nil {
+			t.Error("expected error for nil URL")
+		}
+	})
+}
+
+func TestFhttpResponseToNetHttp(t *testing.T) {
+	fResp := &fhttp.Response{
+		Status:        "200 OK",
+		StatusCode:    200,
+		Proto:         "HTTP/2.0",
+		ProtoMajor:    2,
+		ProtoMinor:    0,
+		Header:        fhttp.Header{"Content-Type": {"text/plain"}},
+		Body:          io.NopCloser(strings.NewReader("hello")),
+		ContentLength: 5,
+		Trailer:       fhttp.Header{"X-Trailer": {"value"}},
+	}
+
+	resp := fhttpResponseToNetHttp(fResp)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected StatusCode=200, got %d", resp.StatusCode)
+	}
+	if resp.ContentLength != 5 {
+		t.Errorf("expected ContentLength=5, got %d", resp.ContentLength)
+	}
+	if resp.Header.Get("Content-Type") != "text/plain" {
+		t.Errorf("expected Content-Type=text/plain, got %s", resp.Header.Get("Content-Type"))
+	}
+	if resp.Trailer.Get("X-Trailer") != "value" {
+		t.Errorf("expected X-Trailer=value, got %s", resp.Trailer.Get("X-Trailer"))
+	}
+}
+
+func TestFhttpToNetHttpRoundTrip(t *testing.T) {
+	body := "test response body"
+	req := httptest.NewRequest("GET", "http://example.com", nil)
+
+	fReq, err := netHttpRequestToFhttp(req)
+	if err != nil {
+		t.Fatalf("conversion failed: %v", err)
+	}
+
+	fResp := &fhttp.Response{
+		Status:     "200 OK",
+		StatusCode: 200,
+		Proto:      "HTTP/2.0",
+		ProtoMajor: 2,
+		Header:     fhttp.Header{},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    fReq,
+	}
+
+	resp := fhttpResponseToNetHttp(fResp)
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading body failed: %v", err)
+	}
+	if string(respBody) != body {
+		t.Errorf("expected body %q, got %q", body, string(respBody))
+	}
+
+	if resp.Request == nil {
+		t.Error("expected non-nil Request in response")
+	}
+}
 
 // --- PeetAPIResponse ---
 
