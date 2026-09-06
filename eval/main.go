@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Requester performs one HTTP round trip through a running fingerprintproxy
@@ -47,7 +48,7 @@ func Run(names []string, target string, request Requester, score Scorer) []Resul
 			continue
 		}
 		s, err := score(resp)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			results = append(results, Result{Profile: p, Err: err.Error()})
 			continue
@@ -58,15 +59,32 @@ func Run(names []string, target string, request Requester, score Scorer) []Resul
 	return results
 }
 
-// JSONScorer decodes {"continuity_score": <float>} from resp.Body.
+// JSONScorer decodes {"continuity_score": <float>} from resp.Body. The field
+// is a pointer so a response that omits continuity_score entirely is
+// reported as an error, not silently scored as 0 (encoding/json leaves
+// missing fields at their zero value, which is indistinguishable from a
+// genuine zero score).
 func JSONScorer(resp *http.Response) (float64, error) {
 	var body struct {
-		ContinuityScore float64 `json:"continuity_score"`
+		ContinuityScore *float64 `json:"continuity_score"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return 0, fmt.Errorf("decode score response: %w", err)
 	}
-	return body.ContinuityScore, nil
+	if body.ContinuityScore == nil {
+		return 0, fmt.Errorf("decode score response: missing continuity_score")
+	}
+	return *body.ContinuityScore, nil
+}
+
+// normalizeProxyAddr prepends the default http:// scheme to addr if it
+// doesn't already have one (e.g. "localhost:8080" -> "http://localhost:8080"),
+// leaving an already-schemed address (e.g. "socks5://host:1080") untouched.
+func normalizeProxyAddr(addr string) string {
+	if strings.Contains(addr, "://") {
+		return addr
+	}
+	return "http://" + addr
 }
 
 // Table renders results as a markdown table.
@@ -102,13 +120,25 @@ func parseProfileListOutput(output string) []string {
 	return names
 }
 
+// defaultFppBin is the -fpp-bin flag's default value. When it's left
+// unchanged and no such binary is installed, listProfiles falls back to
+// building it from source so a dry run works from a clean checkout.
+const defaultFppBin = "fingerprintproxy"
+
 // listProfiles asks the fingerprintproxy binary itself for the canonical
 // profile list, so this harness never carries its own copy of profiles.go's
 // registry that could drift out of sync with it.
 func listProfiles(binPath string) ([]string, error) {
-	out, err := exec.Command(binPath, "-list").Output()
+	cmd := exec.Command(binPath, "-list")
+	if binPath == defaultFppBin {
+		if _, err := exec.LookPath(binPath); err != nil {
+			// Not installed: run it from source instead of failing outright.
+			cmd = exec.Command("go", "run", ".", "-list")
+		}
+	}
+	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("run %s -list: %w", binPath, err)
+		return nil, fmt.Errorf("run %s -list: %w", strings.Join(cmd.Args, " "), err)
 	}
 	names := parseProfileListOutput(string(out))
 	if len(names) == 0 {
@@ -118,10 +148,11 @@ func listProfiles(binPath string) ([]string, error) {
 }
 
 func main() {
-	proxyAddr := flag.String("proxy", "localhost:8080", "fingerprintproxy HTTP proxy address (must already be running)")
-	fppBin := flag.String("fpp-bin", "fingerprintproxy", "path to the fingerprintproxy binary, used to list profiles via -list")
+	proxyAddr := flag.String("proxy", "localhost:8080", "fingerprintproxy HTTP proxy address (must already be running); a URL scheme is optional and defaults to http://")
+	fppBin := flag.String("fpp-bin", defaultFppBin, "path to the fingerprintproxy binary, used to list profiles via -list (falls back to `go run .` if left at the default and not found on PATH)")
 	target := flag.String("target", os.Getenv("EVAL_TARGET_URL"), "continuity-scoring endpoint URL (env EVAL_TARGET_URL)")
 	real := flag.Bool("real", os.Getenv("EVAL_REAL") == "1", "actually hit -target (opt-in; env EVAL_REAL=1). Without it this only prints the plan and exits.")
+	timeout := flag.Duration("timeout", 30*time.Second, "per-request HTTP timeout for real runs")
 	flag.Parse()
 
 	names, err := listProfiles(*fppBin)
@@ -140,12 +171,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	proxyURL, err := url.Parse("http://" + *proxyAddr)
+	proxyURL, err := url.Parse(normalizeProxyAddr(*proxyAddr))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: invalid -proxy address: %v\n", err)
 		os.Exit(1)
 	}
-	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	client := &http.Client{
+		Timeout:   *timeout,
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+	}
 
 	request := func(profile, target string) (*http.Response, error) {
 		req, err := http.NewRequest(http.MethodGet, target, nil)

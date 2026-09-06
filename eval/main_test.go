@@ -85,6 +85,39 @@ func TestRun_MockScorerDeterministicFixture(t *testing.T) {
 	}
 }
 
+func TestJSONScorer_MissingContinuityScoreIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	score, err := JSONScorer(resp)
+	if err == nil {
+		t.Errorf("want error for missing continuity_score, got score %v", score)
+	}
+}
+
+func TestNormalizeProxyAddr(t *testing.T) {
+	cases := map[string]string{
+		"localhost:8080":            "http://localhost:8080",
+		"http://localhost:8080":     "http://localhost:8080",
+		"socks5://localhost:1080":   "socks5://localhost:1080",
+		"https://proxy.example:443": "https://proxy.example:443",
+	}
+	for in, want := range cases {
+		if got := normalizeProxyAddr(in); got != want {
+			t.Errorf("normalizeProxyAddr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestTable(t *testing.T) {
 	results := []Result{
 		{Profile: "chrome_133", Score: 0.91},

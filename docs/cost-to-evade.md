@@ -21,9 +21,11 @@ document is the piece it excludes, applied to `fingerprintproxy`.
 Mapped onto what this repo actually does and does not do (see
 `README.md` → "What This Proxy Can and Cannot Forge"):
 
-- **TLS-layer spoofing cost:** near-zero. `fingerprintproxy` is free,
-  open-source, and this repo is itself the existence proof — running any of
-  its 72 profiles costs nothing beyond compute already in use.
+- **TLS-layer spoofing *licensing* cost:** zero. `fingerprintproxy` is free,
+  open-source, and this repo is itself the existence proof — there is no fee
+  to acquire or run any of its 72 profiles. The *additional* compute,
+  runtime, and network cost of actually operating it is separate and has
+  not been measured; treat it as **unmeasured**, not as zero or near-zero.
 - **Additional cost for full multi-layer coherence:** the open variable.
   Matching a spoofed TLS profile with a *consistent* TCP/IP kernel stack
   (correct TTL, window size, option order) and a residential (rather than
