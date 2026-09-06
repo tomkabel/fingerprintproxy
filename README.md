@@ -21,7 +21,7 @@ This proxy acts as a plug-and-play forward proxy that can be used via `HTTP_PROX
 - **Per-request fingerprint selection** via `X-Fingerprint` header
 - **Transport pooling** for connection reuse per fingerprint profile
 - **MITM support** for transparent HTTPS interception
-- **Support for 65+ browser profiles** (Chrome, Firefox, Safari, etc.)
+- **Support for 72 browser profiles** (Chrome, Firefox, Safari, Opera, and several mobile/app-specific profiles)
 
 ## Quick Start
 
@@ -144,12 +144,54 @@ curl -x http://localhost:8080 \
 
 ## Available Profiles
 
-Run `go run main.go -list` to see all 80+ available profiles including:
+There are **72 profiles** registered in `profiles.go` (64 base profiles + 8
+`_psk` variants). This is a verified count, not an estimate — reproduce it
+yourself:
 
-- `chrome_103` through `chrome_133` (including PSK variants)
+```bash
+awk '/profileRegistry = map/,/^}/' profiles.go | grep -c '":'          # 72 total
+awk '/profileRegistry = map/,/^}/' profiles.go | grep '":' | grep -c '_psk"'  # 8 PSK variants
+```
+
+Run `go run main.go -list` to see all 72 available profiles, including:
+
+- `chrome_103` through `chrome_146` (including PSK variants)
 - `firefox_102` through `firefox_147` (including PSK variants)
-- `safari_18_5`, `safari_ios_18_5`
-- `opera_89`, `opera_91`
+- `safari_15_6_1` through `safari_ios_26_0`
+- `opera_89` through `opera_91`
+- a handful of mobile/app-specific profiles (`okhttp4_android_*`, `zalando_*`, `nike_*`, `mesh_*`, `mms_ios*`, `confirmed_*`, `cloudscraper`)
+
+Note: `chrome_133` is the *default profile name* (see `-profile` below), not
+a count — don't confuse the two.
+
+## What This Proxy Can and Cannot Forge
+
+Be honest about the boundary of what TLS-fingerprint spoofing actually
+covers, so this isn't mistaken for full traffic-fingerprint evasion:
+
+**Forges:**
+- The TLS ClientHello / JA3 / JA4 fingerprint, per profile — cipher suite
+  list, extension order, supported curves/point formats, ALPN, and similar
+  handshake-level details (via `tls-client`/`utls`).
+
+**Does NOT forge:**
+- **TCP SYN kernel fields** — TTL, window size, TCP option order. These come
+  from the OS network stack the proxy process runs on, not from anything
+  `tls-client` controls.
+- **H2/H3 frame timing and behavior** — static settings values can be sent,
+  but the runtime cadence/prioritization pattern of a real browser's frames
+  over time is not reproduced.
+- **WebSocket cadence** — out of scope; this proxy only handles HTTP(S).
+- **Cross-layer coherence** — a spoofed Chrome ClientHello arriving over a
+  Linux-container TCP stack, possibly relayed through a residential proxy
+  with its own TTL/window signature, is internally inconsistent even though
+  each individual layer looks plausible on its own.
+
+Single-layer (TLS-only) spoofing is cheap — this repo is a working example
+of that. Coherent spoofing across all of the layers above is a materially
+harder and more expensive problem, which is exactly why detection strategies
+that combine multiple independent signals (rather than trusting any one
+layer) are harder to defeat than TLS fingerprinting alone would suggest.
 
 ## Environment Variables
 
