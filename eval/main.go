@@ -133,7 +133,14 @@ func listProfiles(binPath string) ([]string, error) {
 	if binPath == defaultFppBin {
 		if _, err := exec.LookPath(binPath); err != nil {
 			// Not installed: run it from source instead of failing outright.
+			// GOPROXY=off keeps this fallback honoring the package's
+			// network-free-by-default contract: with a warm module cache
+			// (the common case, since building/testing this repo already
+			// populates it) this is a no-op, but on a cold cache it fails
+			// fast with a clear error instead of silently reaching out to
+			// the network.
 			cmd = exec.Command("go", "run", ".", "-list")
+			cmd.Env = append(os.Environ(), "GOPROXY=off")
 		}
 	}
 	out, err := cmd.Output()
