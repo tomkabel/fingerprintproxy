@@ -5,7 +5,7 @@
 [![Security](https://github.com/tomkabel/fingerprintproxy/actions/workflows/security.yml/badge.svg?branch=main)](https://github.com/tomkabel/fingerprintproxy/actions/workflows/security.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/tomkabel/fingerprintproxy/badge)](https://scorecard.dev/viewer/?uri=github.com/tomkabel/fingerprintproxy)
 [![Go version](https://img.shields.io/github/go-mod/go-version/tomkabel/fingerprintproxy)](go.mod)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue)](LICENSE)
 
 A forward proxy that sends your outbound HTTPS requests with a real browser's TLS and HTTP/2 fingerprint. You pick the browser per request with one header.
 
@@ -222,4 +222,6 @@ Use fingerprintproxy for testing your own bot-detection and TLS-fingerprinting d
 
 ## License
 
-[MIT](LICENSE)
+Copyright © 2026 Tom Kristian Abel / ProksiAbel OÜ.
+
+Licensed under the [GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later). If you run a modified version of fingerprintproxy as a network service, you must offer its source to the users of that service. Copies obtained while the project was MIT-licensed keep their MIT terms.
