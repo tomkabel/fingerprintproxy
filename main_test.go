@@ -319,7 +319,7 @@ func TestDumbResponseWriter(t *testing.T) {
 		w := &dumbResponseWriter{Conn: mockConn}
 
 		w.WriteHeader(200)
-		w.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		_, _ = w.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
 		data := []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
 		n, err := w.Write(data)
@@ -343,10 +343,10 @@ func TestDumbResponseWriter(t *testing.T) {
 		w := &dumbResponseWriter{Conn: mockConn}
 
 		w.WriteHeader(200)
-		w.Write([]byte("HTTP/1.1 200 "))
-		w.Write([]byte("Connection Established\r\n"))
-		w.Write([]byte("\r\n"))
-		w.Write([]byte("actual data"))
+		_, _ = w.Write([]byte("HTTP/1.1 200 "))
+		_, _ = w.Write([]byte("Connection Established\r\n"))
+		_, _ = w.Write([]byte("\r\n"))
+		_, _ = w.Write([]byte("actual data"))
 		written, err := mockConn.ReadWritten()
 		if err != nil {
 			t.Fatalf("unexpected read error: %v", err)

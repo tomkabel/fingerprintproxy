@@ -330,8 +330,6 @@ type fingerprintProxy struct {
 	verbose            bool
 	defaultProfile     string
 	insecureSkipVerify bool
-	httpAddr           string
-	httpsAddr          string
 	connWg             sync.WaitGroup
 }
 
@@ -497,7 +495,7 @@ func (fp *fingerprintProxy) Run(httpAddr, httpsAddr string) error {
 
 // handleHTTPS handles an incoming HTTPS connection
 func (fp *fingerprintProxy) handleHTTPS(c net.Conn) {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	tlsConn, err := vhost.TLS(c)
 	if err != nil {
@@ -549,7 +547,7 @@ func (dumb *dumbResponseWriter) Write(buf []byte) (int, error) {
 		return dumb.Conn.Write(buf)
 	}
 	dumb.connectBuf.Write(buf)
-	if bytes.Index(dumb.connectBuf.Bytes(), []byte("\r\n\r\n")) >= 0 {
+	if bytes.Contains(dumb.connectBuf.Bytes(), []byte("\r\n\r\n")) {
 		dumb.connectComplete = true
 		dumb.connectBuf.Reset()
 	}
