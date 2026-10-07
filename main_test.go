@@ -839,17 +839,21 @@ func TestRedactProxyURL(t *testing.T) {
 	tests := []struct {
 		in, want string
 	}{
-		{"http://user:secret@proxy.example:8080", "http://user:xxxxx@proxy.example:8080"},
-		{"socks5://user:secret@10.0.0.1:1080", "socks5://user:xxxxx@10.0.0.1:1080"},
+		{"http://user:secret@proxy.example:8080", "http://proxy.example:8080"},
+		{"socks5://user:secret@10.0.0.1:1080", "socks5://10.0.0.1:1080"},
+		{"http://token@proxy.example:8080", "http://proxy.example:8080"},
 		{"http://proxy.example:8080", "http://proxy.example:8080"},
 		{"://bad", "<invalid proxy URL>"},
 	}
 	for _, tt := range tests {
-		if got := redactProxyURL(tt.in); got != tt.want {
+		got := redactProxyURL(tt.in)
+		if got != tt.want {
 			t.Errorf("redactProxyURL(%q) = %q, want %q", tt.in, got, tt.want)
 		}
-		if strings.Contains(redactProxyURL(tt.in), "secret") {
-			t.Errorf("redactProxyURL(%q) leaked the password", tt.in)
+		for _, leak := range []string{"user", "secret", "token"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("redactProxyURL(%q) leaked %q: %q", tt.in, leak, got)
+			}
 		}
 	}
 }

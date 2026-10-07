@@ -221,15 +221,18 @@ func GetProfileFromRequest(req *http.Request, defaultProfile string) (profileNam
 	return defaultProfile, true
 }
 
-// redactProxyURL returns proxyURL with any password replaced by "xxxxx" so
-// upstream proxy credentials never reach logs or error responses. Values that
-// do not parse as a URL are replaced entirely.
+// redactProxyURL returns proxyURL with the entire userinfo section stripped
+// so upstream proxy credentials never reach logs or error responses. This
+// removes not only the password but also a username-borne token, e.g.
+// http://token@proxy.example:8080 logs as http://proxy.example:8080. Values
+// that do not parse as a URL are replaced entirely.
 func redactProxyURL(proxyURL string) string {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		return "<invalid proxy URL>"
 	}
-	return u.Redacted()
+	u.User = nil
+	return u.String()
 }
 
 // GetProxyFromRequest extracts the upstream proxy URL from the request.

@@ -46,10 +46,11 @@ jobs:
         if: matrix.go == 'oldstable'
         run: go test -short -count=1 ./...
 
-      # Full run on stable, including the live JA3 checks against tls.peet.ws.
-      - name: Unit + integration tests with race detector (stable)
+      # -short skips the live tls.peet.ws JA3 checks so the blocking PR gate
+      # never depends on an external service; they run via integration.yml.
+      - name: Unit tests with race detector (stable)
         if: matrix.go == 'stable'
-        run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -short -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Coverage summary
         if: matrix.go == 'stable'
