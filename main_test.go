@@ -233,6 +233,7 @@ func TestFingerprintRoundTripperWrapper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		t.Errorf("expected status 200, got %d", resp.StatusCode)
@@ -254,7 +255,10 @@ func TestFingerprintRoundTripperWrapperContextCancellation(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://example.com", nil).WithContext(ctx)
 	ctxProxy := &goproxy.ProxyCtx{Req: req}
 
-	_, err := wrapper.RoundTrip(req, ctxProxy)
+	resp, err := wrapper.RoundTrip(req, ctxProxy)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err == nil {
 		t.Error("expected error for cancelled context")
 	}
@@ -492,6 +496,7 @@ func TestFhttpResponseToNetHttp(t *testing.T) {
 	}
 
 	resp := fhttpResponseToNetHttp(fResp)
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		t.Errorf("expected StatusCode=200, got %d", resp.StatusCode)
@@ -527,6 +532,7 @@ func TestFhttpToNetHttpRoundTrip(t *testing.T) {
 	}
 
 	resp := fhttpResponseToNetHttp(fResp)
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
