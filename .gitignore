@@ -4,3 +4,5 @@
 kilo.jsonc
 mydatabase.db
 fingerprintproxy
+dist/
+coverage.out
