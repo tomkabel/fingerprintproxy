@@ -47,6 +47,10 @@ const defaultCacheTTL = 30 * time.Minute
 // MaxCacheEntries limits the number of cached transports
 const MaxCacheEntries = 20
 
+// readHeaderTimeout bounds how long the HTTP listener waits for request
+// headers, mitigating slowloris-style connection exhaustion (gosec G112).
+const readHeaderTimeout = 10 * time.Second
+
 // allHosts matches any host for transparent proxy MITM.
 var allHosts = regexp.MustCompile(`^.*$`)
 
@@ -126,11 +130,11 @@ func (tc *TransportCache) GetOrCreate(profileName, proxyURL string) (http.RoundT
 	// Apply proxy if specified
 	if proxyURL != "" {
 		if err := client.SetProxy(proxyURL); err != nil {
-			return nil, fmt.Errorf("failed to set proxy %s for profile %s: %w", proxyURL, profileName, err)
+			return nil, fmt.Errorf("failed to set proxy %s for profile %s: %w", redactProxyURL(proxyURL), profileName, err)
 		}
-		log.Printf("[Transport] Created new transport for profile: %s with proxy: %s", profileName, proxyURL)
+		log.Printf("[Transport] Created new transport for profile: %q with proxy: %q", profileName, redactProxyURL(proxyURL)) // #nosec G706 -- %q escapes control characters, preventing log forging
 	} else {
-		log.Printf("[Transport] Created new transport for profile: %s (no proxy)", profileName)
+		log.Printf("[Transport] Created new transport for profile: %q (no proxy)", profileName) // #nosec G706 -- %q escapes control characters, preventing log forging
 	}
 
 	now := time.Now()
@@ -212,9 +216,23 @@ func GetProfileFromRequest(req *http.Request, defaultProfile string) (profileNam
 		if GetProfile(aliased) != nil {
 			return aliased, false
 		}
-		log.Printf("[Warning] Invalid X-Fingerprint profile: %s, falling back", fp)
+		log.Printf("[Warning] Invalid X-Fingerprint profile: %q, falling back", fp) // #nosec G706 -- %q escapes control characters, preventing log forging
 	}
 	return defaultProfile, true
+}
+
+// redactProxyURL returns proxyURL with the entire userinfo section stripped
+// so upstream proxy credentials never reach logs or error responses. This
+// removes not only the password but also a username-borne token, e.g.
+// http://token@proxy.example:8080 logs as http://proxy.example:8080. Values
+// that do not parse as a URL are replaced entirely.
+func redactProxyURL(proxyURL string) string {
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return "<invalid proxy URL>"
+	}
+	u.User = nil
+	return u.String()
 }
 
 // GetProxyFromRequest extracts the upstream proxy URL from the request.
@@ -330,8 +348,6 @@ type fingerprintProxy struct {
 	verbose            bool
 	defaultProfile     string
 	insecureSkipVerify bool
-	httpAddr           string
-	httpsAddr          string
 	connWg             sync.WaitGroup
 }
 
@@ -381,7 +397,7 @@ func (fp *fingerprintProxy) setupHandlers(defaultProfile string) {
 		}
 
 		if proxyURL != "" {
-			ctx.Logf("[Proxy] Using upstream proxy: %s", proxyURL)
+			ctx.Logf("[Proxy] Using upstream proxy: %q", redactProxyURL(proxyURL))
 		}
 
 		transport, err := fp.transportCache.GetOrCreate(profileName, proxyURL)
@@ -421,8 +437,9 @@ func (fp *fingerprintProxy) Run(httpAddr, httpsAddr string) error {
 	var wg sync.WaitGroup
 
 	httpServer := &http.Server{
-		Addr:    httpAddr,
-		Handler: fp.proxy,
+		Addr:              httpAddr,
+		Handler:           fp.proxy,
+		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
 	wg.Add(1)
@@ -497,7 +514,7 @@ func (fp *fingerprintProxy) Run(httpAddr, httpsAddr string) error {
 
 // handleHTTPS handles an incoming HTTPS connection
 func (fp *fingerprintProxy) handleHTTPS(c net.Conn) {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	tlsConn, err := vhost.TLS(c)
 	if err != nil {
@@ -549,7 +566,7 @@ func (dumb *dumbResponseWriter) Write(buf []byte) (int, error) {
 		return dumb.Conn.Write(buf)
 	}
 	dumb.connectBuf.Write(buf)
-	if bytes.Index(dumb.connectBuf.Bytes(), []byte("\r\n\r\n")) >= 0 {
+	if bytes.Contains(dumb.connectBuf.Bytes(), []byte("\r\n\r\n")) {
 		dumb.connectComplete = true
 		dumb.connectBuf.Reset()
 	}
