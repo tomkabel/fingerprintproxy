@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -848,6 +850,24 @@ func TestRedactProxyURL(t *testing.T) {
 		}
 		if strings.Contains(redactProxyURL(tt.in), "secret") {
 			t.Errorf("redactProxyURL(%q) leaked the password", tt.in)
+		}
+	}
+}
+
+// TestReadmeProfileCount keeps the documented profile count in sync with the
+// registry; the README previously drifted to both "65+" and "80+".
+func TestReadmeProfileCount(t *testing.T) {
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	want := fmt.Sprintf("%d profiles", len(profileRegistry))
+	if !strings.Contains(string(readme), want) {
+		t.Errorf("README.md does not mention %q; update it after changing profiles.go", want)
+	}
+	for alias, target := range profileAliases {
+		if !strings.Contains(string(readme), "`"+alias+"`") || !strings.Contains(string(readme), "`"+target+"`") {
+			t.Errorf("README.md alias table is missing %s -> %s", alias, target)
 		}
 	}
 }
