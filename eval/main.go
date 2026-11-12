@@ -9,6 +9,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -21,6 +23,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/elazarl/goproxy"
 )
 
 const (
@@ -206,6 +210,25 @@ func listProfiles(binPath string) ([]string, error) {
 	return names, nil
 }
 
+// proxyTLSConfig returns the client TLS config for HTTPS targets requested
+// through the proxy, which terminates TLS with goproxy's built-in CA. With
+// trustProxyCA the CA is added to the system roots for this client only;
+// verification stays on either way. Without it (nil config) an HTTPS target
+// fails with an x509 error, which is the safe default.
+func proxyTLSConfig(trustProxyCA bool) (*tls.Config, error) {
+	if !trustProxyCA {
+		return nil, nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(goproxy.CA_CERT) {
+		return nil, errors.New("proxy CA is not valid PEM")
+	}
+	return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, nil
+}
+
 // newRequester returns a Requester that sends a GET to the target using
 // client (which should already be configured to route through the proxy) with
 // the profile in the X-Fingerprint header.
@@ -236,6 +259,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	fppBin := fs.String("fpp-bin", defaultFppBin, "path to the fingerprintproxy binary, used to list profiles via -list (falls back to `go run` of the root package if left at the default and not found on PATH)")
 	target := fs.String("target", getenv("EVAL_TARGET_URL"), "continuity-scoring endpoint URL (env EVAL_TARGET_URL)")
 	real := fs.Bool("real", getenv("EVAL_REAL") == "1", "actually hit -target (opt-in; env EVAL_REAL=1). Without it this only prints the plan and exits.")
+	trustProxyCA := fs.Bool("trust-proxy-ca", false, "trust the proxy's built-in (publicly known) MITM CA for this run's HTTPS requests; certificate verification stays on. Required for https:// targets.")
 	timeout := fs.Duration("timeout", 30*time.Second, "per-request HTTP timeout for real runs")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -270,9 +294,14 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		return 1
 	}
 
+	tlsConfig, err := proxyTLSConfig(*trustProxyCA)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
 	client := &http.Client{
 		Timeout:   *timeout,
-		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL), TLSClientConfig: tlsConfig},
 	}
 	results := Run(names, targetURL.String(), newRequester(client), JSONScorer)
 	fmt.Fprint(stdout, Table(results))

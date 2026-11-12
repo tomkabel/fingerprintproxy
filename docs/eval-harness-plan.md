@@ -146,6 +146,10 @@ strictly opt-in:
   `go run <module path>` with `GOPROXY=off`, so a cold module cache fails
   fast instead of downloading; this works from any directory in the module.
 - A real run additionally requires `-target`/`EVAL_TARGET_URL` to be set.
+- `https://` targets need `-trust-proxy-ca`: the proxy re-signs HTTPS with
+  goproxy's built-in (publicly known) CA, so without the flag certificate
+  verification fails per profile with an x509 error. The flag adds that CA to
+  the harness client's own trust pool; verification is never disabled.
 - No secrets are hardcoded anywhere; `-target` is the only endpoint
   configuration, and it is caller-supplied.
 

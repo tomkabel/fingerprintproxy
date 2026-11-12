@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/elazarl/goproxy"
 )
 
 // fixture is the deterministic mock scorer's ground truth: profile name ->
@@ -402,4 +406,59 @@ func TestRun_CLI(t *testing.T) {
 			}
 		}
 	})
+}
+
+// mitmProxy starts a goproxy MITM proxy configured like fingerprintproxy
+// (AlwaysMitm, built-in CA) whose upstream trusts only the given test server,
+// and returns its host:port.
+func mitmProxy(t *testing.T, upstream *httptest.Server) string {
+	t.Helper()
+	pool := x509.NewCertPool()
+	pool.AddCert(upstream.Certificate())
+	p := goproxy.NewProxyHttpServer()
+	p.Tr = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}
+	p.OnRequest().HandleConnect(goproxy.AlwaysMitm)
+	srv := httptest.NewServer(p)
+	t.Cleanup(srv.Close)
+	return srv.Listener.Addr().String()
+}
+
+// TestRun_HTTPSTargetThroughMITMProxy verifies an https:// target works only
+// with -trust-proxy-ca, and that without it certificate verification rejects
+// the proxy's certificate instead of being silently disabled.
+func TestRun_HTTPSTargetThroughMITMProxy(t *testing.T) {
+	bin := useFakeFpp(t, "list")
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]float64{"continuity_score": fixture[r.Header.Get("X-Fingerprint")]})
+	}))
+	defer target.Close()
+	proxyAddr := mitmProxy(t, target)
+	base := []string{"-fpp-bin", bin, "-real", "-target", target.URL, "-proxy", proxyAddr, "-timeout", "10s"}
+
+	code, out, errOut := runCLI(append(base, "-trust-proxy-ca"), nil)
+	if code != 0 || errOut != "" {
+		t.Fatalf("code=%d stderr=%q", code, errOut)
+	}
+	for profile, score := range fixture {
+		if want := fmt.Sprintf("| %s | %.4f |  |", profile, score); !strings.Contains(out, want) {
+			t.Errorf("trusted run missing %q:\n%s", want, out)
+		}
+	}
+
+	code, out, _ = runCLI(base, nil)
+	if code != 0 || strings.Count(out, "x509") != len(fixture) {
+		t.Errorf("untrusted run should record an x509 error per profile; code=%d out:\n%s", code, out)
+	}
+}
+
+// TestProxyTLSConfig verifies the default leaves the transport's TLS config
+// alone and the opt-in builds a verifying config.
+func TestProxyTLSConfig(t *testing.T) {
+	if cfg, err := proxyTLSConfig(false); cfg != nil || err != nil {
+		t.Errorf("default must return nil config, got %v %v", cfg, err)
+	}
+	cfg, err := proxyTLSConfig(true)
+	if err != nil || cfg == nil || cfg.RootCAs == nil || cfg.InsecureSkipVerify {
+		t.Errorf("opt-in must return a verifying config with RootCAs, got %+v %v", cfg, err)
+	}
 }
