@@ -141,7 +141,10 @@ error — it never fabricates or interpolates a score. Real-endpoint runs are
 strictly opt-in:
 - Dry run is the default: with no `-real` flag and no `EVAL_REAL=1`, the
   program only prints what it *would* do (profile count, target, proxy
-  address) and exits 0 — no network call beyond invoking `-list`.
+  address) and exits 0 — no network call beyond invoking `-list`. If no
+  `fingerprintproxy` binary is on `PATH`, `-list` runs from source via
+  `go run <module path>` with `GOPROXY=off`, so a cold module cache fails
+  fast instead of downloading; this works from any directory in the module.
 - A real run additionally requires `-target`/`EVAL_TARGET_URL` to be set.
 - No secrets are hardcoded anywhere; `-target` is the only endpoint
   configuration, and it is caller-supplied.
@@ -171,8 +174,9 @@ module.
 ("Operator Synthesis", `tomkabel/google-botguard-security-research`) §5 cost
 model (VLM inference pricing, proxy-supply elasticity, latency overhead) by
 reference, and describe how this repo's harness output would plug into it
-(TLS-layer cost ≈ near-zero given this proxy is free/open-source; the
-*additional* cost of full multi-layer coherence — residential IP path +
+(TLS-layer *licensing* cost is zero since this proxy is free/open-source,
+but its operational cost is unmeasured, not near-zero; the *additional*
+cost of full multi-layer coherence — residential IP path +
 matched kernel TCP stack — is the open variable). It explicitly states:
 
 > No real-endpoint harness run has been executed as of this writing. The
