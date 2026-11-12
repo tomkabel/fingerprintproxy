@@ -1,0 +1,35 @@
+# Live JA3 integration checks against tls.peet.ws. These tests depend on an
+# external service, so they run on a schedule or manual dispatch instead of
+# the blocking pull-request CI workflow (see ci.yml, which runs -short).
+name: Integration Tests
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ja3:
+    name: Live JA3 checks (tls.peet.ws)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Integration tests
+        run: go test -run 'FingerprintAgainstAPI' -count=1 -v ./...

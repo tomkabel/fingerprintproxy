@@ -1,0 +1,35 @@
+# Dependabot version updates. Replaces the former custom "Dependencies"
+# workflow, which failed because `go get -u` ran on a toolchain older than
+# the modules required.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(deps)"
+    labels: [dependencies, go]
+    groups:
+      golang-x:
+        patterns: ["golang.org/x/*"]
+      tls-stack:
+        patterns: ["github.com/bogdanfinn/*"]
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "ci(deps)"
+    labels: [dependencies, github-actions]
+    groups:
+      actions:
+        patterns: ["*"]
+    cooldown:
+      default-days: 7

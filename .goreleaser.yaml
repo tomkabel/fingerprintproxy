@@ -1,13 +1,12 @@
-# GoReleaser configuration for fingerprintproxy
-# See https://goreleaser.com/customization/ for details
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# GoReleaser v2 configuration. Validate with: goreleaser check
+version: 2
 
 project_name: fingerprintproxy
 
-version: 2
-
 before:
   hooks:
-    - go mod download
+    - go mod tidy -diff
 
 builds:
   - id: fingerprintproxy
@@ -15,40 +14,40 @@ builds:
     binary: fingerprintproxy
     env:
       - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
     ldflags:
       - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}" # reproducible builds
 
 archives:
   - id: default
-    format: tar.gz
+    formats: [tar.gz]
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
 
-checksums:
-  - algorithm: sha256
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
 
 snapshot:
-  name_template: "{{ .Tag }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 
-# Disable announce as defaults aren't configured
-announce:
-  twitter:
-    enabled: false
-  slack:
-    enabled: false
-
-# For GitHub Releases
-release:
-  github:
-    enabled: true
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore\\(deps\\):"
+      - "^ci\\(deps\\):"

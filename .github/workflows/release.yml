@@ -2,42 +2,46 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+    tags: ["v*"]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
   release:
-    name: Create Release
+    name: GoReleaser
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    permissions:
+      contents: write # create the GitHub release
+      id-token: write # sigstore signing for attestations
+      attestations: write # build provenance
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25'
-          cache: true
+          go-version-file: go.mod
+          cache: false # never restore a cache into a release build
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+      - name: GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
-          version: '~> v2'
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Nightly builds available via workflow_dispatch
-  # To enable: remove the "if: false" line and trigger manually
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/checksums.txt

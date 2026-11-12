@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -233,6 +235,7 @@ func TestFingerprintRoundTripperWrapper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		t.Errorf("expected status 200, got %d", resp.StatusCode)
@@ -254,7 +257,10 @@ func TestFingerprintRoundTripperWrapperContextCancellation(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://example.com", nil).WithContext(ctx)
 	ctxProxy := &goproxy.ProxyCtx{Req: req}
 
-	_, err := wrapper.RoundTrip(req, ctxProxy)
+	resp, err := wrapper.RoundTrip(req, ctxProxy)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err == nil {
 		t.Error("expected error for cancelled context")
 	}
@@ -319,7 +325,7 @@ func TestDumbResponseWriter(t *testing.T) {
 		w := &dumbResponseWriter{Conn: mockConn}
 
 		w.WriteHeader(200)
-		w.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		_, _ = w.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
 		data := []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
 		n, err := w.Write(data)
@@ -343,10 +349,10 @@ func TestDumbResponseWriter(t *testing.T) {
 		w := &dumbResponseWriter{Conn: mockConn}
 
 		w.WriteHeader(200)
-		w.Write([]byte("HTTP/1.1 200 "))
-		w.Write([]byte("Connection Established\r\n"))
-		w.Write([]byte("\r\n"))
-		w.Write([]byte("actual data"))
+		_, _ = w.Write([]byte("HTTP/1.1 200 "))
+		_, _ = w.Write([]byte("Connection Established\r\n"))
+		_, _ = w.Write([]byte("\r\n"))
+		_, _ = w.Write([]byte("actual data"))
 		written, err := mockConn.ReadWritten()
 		if err != nil {
 			t.Fatalf("unexpected read error: %v", err)
@@ -492,6 +498,7 @@ func TestFhttpResponseToNetHttp(t *testing.T) {
 	}
 
 	resp := fhttpResponseToNetHttp(fResp)
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != 200 {
 		t.Errorf("expected StatusCode=200, got %d", resp.StatusCode)
@@ -527,6 +534,7 @@ func TestFhttpToNetHttpRoundTrip(t *testing.T) {
 	}
 
 	resp := fhttpResponseToNetHttp(fResp)
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -824,5 +832,46 @@ func TestGetProxyFromRequest(t *testing.T) {
 				t.Errorf("expected proxy URL %s, got %s", tt.expectedURL, proxyURL)
 			}
 		})
+	}
+}
+
+func TestRedactProxyURL(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"http://user:secret@proxy.example:8080", "http://proxy.example:8080"},
+		{"socks5://user:secret@10.0.0.1:1080", "socks5://10.0.0.1:1080"},
+		{"http://token@proxy.example:8080", "http://proxy.example:8080"},
+		{"http://proxy.example:8080", "http://proxy.example:8080"},
+		{"://bad", "<invalid proxy URL>"},
+	}
+	for _, tt := range tests {
+		got := redactProxyURL(tt.in)
+		if got != tt.want {
+			t.Errorf("redactProxyURL(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+		for _, leak := range []string{"user", "secret", "token"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("redactProxyURL(%q) leaked %q: %q", tt.in, leak, got)
+			}
+		}
+	}
+}
+
+// TestReadmeProfileCount keeps the documented profile count in sync with the
+// registry; the README previously drifted to both "65+" and "80+".
+func TestReadmeProfileCount(t *testing.T) {
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	want := fmt.Sprintf("%d profiles", len(profileRegistry))
+	if !strings.Contains(string(readme), want) {
+		t.Errorf("README.md does not mention %q; update it after changing profiles.go", want)
+	}
+	for alias, target := range profileAliases {
+		if !strings.Contains(string(readme), "`"+alias+"`") || !strings.Contains(string(readme), "`"+target+"`") {
+			t.Errorf("README.md alias table is missing %s -> %s", alias, target)
+		}
 	}
 }
