@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/bogdanfinn/fhttp v0.6.8
 	github.com/bogdanfinn/tls-client v1.14.0
-	github.com/elazarl/goproxy v1.8.4
+	github.com/elazarl/goproxy v1.9.2
 	github.com/inconshreveable/go-vhost v1.0.0
 )
 
