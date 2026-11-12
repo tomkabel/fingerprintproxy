@@ -29,6 +29,7 @@ The target sees a Firefox 147 ClientHello (JA3/JA4) instead of curl's. The proxy
 - [Chaining behind another proxy](#chaining-behind-another-proxy)
 - [How it works](#how-it-works)
 - [Development](#development)
+- [What this proxy can and cannot forge](#what-this-proxy-can-and-cannot-forge)
 - [Security](#security)
 - [Responsible use](#responsible-use)
 
@@ -116,6 +117,13 @@ The proxy strips both headers before forwarding, so the target never sees them.
 ## Profiles
 
 `fingerprintproxy -list` prints all 72 profiles and whether each carries HTTP/3 settings or uses TLS session resumption (PSK).
+
+The count is verified, not estimated (64 base profiles plus 8 `_psk` variants). Reproduce it from `profiles.go`:
+
+```bash
+awk '/profileRegistry = map/,/^}/' profiles.go | grep -c '":'                  # 72 total
+awk '/profileRegistry = map/,/^}/' profiles.go | grep '":' | grep -c '_psk"'   # 8 PSK variants
+```
 
 <details>
 <summary>Full profile list</summary>
@@ -211,6 +219,35 @@ The integration tests compare JA3 hashes reported by tls.peet.ws. They fail on n
 CI runs build and tests on both supported Go releases, cross-compiles six targets, and runs golangci-lint, actionlint, zizmor, govulncheck, gosec, CodeQL and OpenSSF Scorecard. Dependabot opens grouped weekly updates for Go modules and GitHub Actions. All actions are pinned to commit SHAs.
 
 To cut a release, push a `v*` tag. GoReleaser builds the archives and the workflow attests their checksums.
+
+## What This Proxy Can and Cannot Forge
+
+Be honest about the boundary of what TLS-fingerprint spoofing actually
+covers, so this isn't mistaken for full traffic-fingerprint evasion:
+
+**Forges:**
+- The TLS ClientHello / JA3 / JA4 fingerprint, per profile — cipher suite
+  list, extension order, supported curves/point formats, ALPN, and similar
+  handshake-level details (via `tls-client`/`utls`).
+
+**Does NOT forge:**
+- **TCP SYN kernel fields** — TTL, window size, TCP option order. These come
+  from the OS network stack the proxy process runs on, not from anything
+  `tls-client` controls.
+- **H2/H3 frame timing and behavior** — static settings values can be sent,
+  but the runtime cadence/prioritization pattern of a real browser's frames
+  over time is not reproduced.
+- **WebSocket cadence** — out of scope; this proxy only handles HTTP(S).
+- **Cross-layer coherence** — a spoofed Chrome ClientHello arriving over a
+  Linux-container TCP stack, possibly relayed through a residential proxy
+  with its own TTL/window signature, is internally inconsistent even though
+  each individual layer looks plausible on its own.
+
+Single-layer (TLS-only) spoofing is cheap — this repo is a working example
+of that. Coherent spoofing across all of the layers above is a materially
+harder and more expensive problem, which is exactly why detection strategies
+that combine multiple independent signals (rather than trusting any one
+layer) are harder to defeat than TLS fingerprinting alone would suggest.
 
 ## Security
 
